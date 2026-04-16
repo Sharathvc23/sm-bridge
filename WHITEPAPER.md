@@ -98,17 +98,15 @@ A complete federation workflow proceeds as follows:
 
 The governance layer's `approval_to_integrity_facts()` function converts cryptographic approvals into metadata that becomes discoverable through bridge endpoints, enabling consuming registries to filter agents by governance status.
 
-## Future Work
-
-- WebSocket delta streaming via a `/nanda/deltas/stream` endpoint for real-time push-based sync, complementing the current poll-based delta feed
-- Registry attestation by signing index and delta responses with Ed25519 signatures, integrating with `nanda-model-governance` for cryptographic proof of registry integrity
-- Quilt gossip protocol for transitive peer-to-peer delta propagation using the `peers` field in the well-known document, enabling federation without a central coordinator
-- Async delta store variant for registries using async database drivers (asyncpg, motor)
-- Rate limiting and ETag-based caching for the index and resolve endpoints
-
 ## References
 
 1. NANDA Protocol. "Network of AI Agents in Decentralized Architecture." https://projectnanda.org
 2. NANDA Quilt. "Quilt of Registries and Verified AgentFacts." https://github.com/aidecentralized/NANDA-Quilt-of-Registries-and-Verified-AgentFacts
 3. Google. "Agent-to-Agent (A2A) Protocol." https://github.com/google/A2A
 4. W3C. "Decentralized Identifiers (DIDs) v1.0." W3C Recommendation, July 2022. https://www.w3.org/TR/did-core/
+
+---
+
+*First published: 2026-04-15 | Last modified: 2026-04-15*
+
+*[stellarminds.ai](https://stellarminds.ai) — Research Contribution to [Project NANDA](https://projectnanda.org)*
