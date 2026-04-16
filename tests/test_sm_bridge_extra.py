@@ -75,7 +75,7 @@ def _build_router(converter=None, delta_store=None, tools=None):
         base_url=TEST_BASE_URL,
     )
     delta_store = delta_store or DeltaStore()
-    router = create_sm_router(
+    router, wellknown_router = create_sm_router(
         converter=converter,
         delta_store=delta_store,
         registry_id=TEST_REGISTRY_ID,
@@ -85,7 +85,7 @@ def _build_router(converter=None, delta_store=None, tools=None):
         tools=tools,
         namespaces=["did:web:provider.test:*"],
     )
-    return router, converter, delta_store
+    return router, wellknown_router, converter, delta_store
 
 
 # =====================================================================
@@ -123,7 +123,7 @@ class TestRouterFailures:
     """Router error-path tests."""
 
     def test_resolve_not_found_and_not_public(self):
-        router, converter, _ = _build_router()
+        router, _, converter, _ = _build_router()
         private_agent = SimpleAgent(
             id="private", name="Private", description="priv", public=False, namespace="ns"
         )
@@ -362,7 +362,7 @@ def test_delta_store_pruning_get_and_clear():
 
 
 def test_index_filters_private_and_lists_public():
-    router, converter, _ = _build_router()
+    router, _, converter, _ = _build_router()
     public_agent = SimpleAgent(id="public", name="Public", description="pub", labels=["chat"])
     private_agent = SimpleAgent(id="private", name="Private", description="priv", public=False)
     converter.register(public_agent)
@@ -376,7 +376,7 @@ def test_index_filters_private_and_lists_public():
 
 
 def test_resolve_success_returns_agentfacts():
-    router, converter, _ = _build_router()
+    router, _, converter, _ = _build_router()
     agent = SimpleAgent(id="good", name="Good Agent", description="ok", labels=["chat"])
     converter.register(agent)
 
@@ -388,7 +388,7 @@ def test_resolve_success_returns_agentfacts():
 
 
 def test_deltas_endpoint_returns_changes_and_next_seq():
-    router, converter, delta_store = _build_router()
+    router, _, converter, delta_store = _build_router()
     agent = SimpleAgent(id="delta-agent", name="Delta Agent", description="desc")
     converter.register(agent)
     delta_store.add("upsert", converter.to_sm(agent))
@@ -410,13 +410,14 @@ def test_tools_and_wellknown_routes():
             version="v1",
         )
     ]
-    router, _, _ = _build_router(tools=tools)
+    router, wellknown_router, _, _ = _build_router(tools=tools)
 
     tools_route = next(r for r in router.routes if r.path.endswith("/tools"))
     tools_resp = tools_route.endpoint().model_dump()
     assert tools_resp["tools"][0]["tool_id"] == "t1"
 
-    wellknown_route = next(r for r in router.routes if "well-known" in r.path)
+    # well-known endpoint is on the separate unprefixed router (RFC 8615)
+    wellknown_route = next(r for r in wellknown_router.routes if "well-known" in r.path)
     wellknown = wellknown_route.endpoint().model_dump()
     assert wellknown["tools_url"] is not None
     assert "mcp-tools" in wellknown["capabilities"]

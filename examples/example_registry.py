@@ -123,8 +123,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Mount the NANDA bridge router
+# Mount NANDA routers — main endpoints + well-known discovery at domain root
 app.include_router(bridge.router)
+app.include_router(bridge.wellknown_router)
 
 
 # Add a simple health check

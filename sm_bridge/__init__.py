@@ -21,6 +21,7 @@ Usage:
 
     app = FastAPI()
     app.include_router(bridge.router)
+    app.include_router(bridge.wellknown_router)
 
 See https://github.com/projnanda for the official NANDA specification.
 """
@@ -48,7 +49,7 @@ from .models import (
 from .router import SmBridge, create_sm_router
 from .store import DeltaStore, PersistentDeltaStore
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __all__ = [
     # Core Models
     "SmAgentFacts",

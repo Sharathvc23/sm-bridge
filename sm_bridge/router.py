@@ -41,8 +41,8 @@ def create_sm_router(
     tools: list[SmTool] | None = None,
     namespaces: list[str] | None = None,
     prefix: str = "/nanda",
-) -> APIRouter:
-    """Create a FastAPI router with NANDA endpoints.
+) -> tuple[APIRouter, APIRouter]:
+    """Create FastAPI routers with NANDA endpoints.
 
     Args:
         converter: Agent converter implementing the AgentConverter protocol
@@ -56,7 +56,9 @@ def create_sm_router(
         prefix: URL prefix for endpoints (default: "/nanda")
 
     Returns:
-        FastAPI APIRouter with NANDA endpoints
+        Tuple of (nanda_router, wellknown_router). The wellknown_router
+        must be mounted without a prefix so /.well-known/nanda.json is
+        served at the domain root per RFC 8615.
 
     Usage:
         from fastapi import FastAPI
@@ -69,7 +71,7 @@ def create_sm_router(
         )
         delta_store = DeltaStore()
 
-        router = create_sm_router(
+        nanda_router, wellknown_router = create_sm_router(
             converter=converter,
             delta_store=delta_store,
             registry_id="my-registry",
@@ -79,9 +81,11 @@ def create_sm_router(
         )
 
         app = FastAPI()
-        app.include_router(router)
+        app.include_router(nanda_router)
+        app.include_router(wellknown_router)
     """
     router = APIRouter(prefix=prefix, tags=["nanda"])
+    wellknown_router = APIRouter(tags=["nanda-discovery"])
 
     tools = tools or []
     namespaces = namespaces or [f"did:web:{provider_url.replace('https://', '')}:*"]
@@ -102,11 +106,14 @@ def create_sm_router(
             if converter.is_public(agent):
                 agents.append(converter.to_sm(agent))
 
+        # total_count must reflect all public agents, not just this page
+        total = sum(1 for a in converter.list_agents(limit=10_000, offset=0) if converter.is_public(a))
+
         return SmAgentFactsIndexResponse(
             generated_at=datetime.now(timezone.utc),
             registry_id=registry_id,
             agents=agents,
-            total_count=len(agents),
+            total_count=total,
         )
 
     @router.get("/resolve", response_model=SmAgentFacts)
@@ -163,8 +170,9 @@ def create_sm_router(
             tools=tools,
         )
 
-    # Well-known endpoint (note: no prefix, mounted separately)
-    @router.get("/.well-known/nanda.json", response_model=SmWellKnown)
+    # Well-known endpoint — mounted on a separate unprefixed router
+    # so it serves at /.well-known/nanda.json per RFC 8615.
+    @wellknown_router.get("/.well-known/nanda.json", response_model=SmWellKnown)
     def sm_wellknown() -> SmWellKnown:
         """NANDA registry discovery document.
 
@@ -185,7 +193,7 @@ def create_sm_router(
             capabilities=["agentfacts", "deltas"] + (["mcp-tools"] if tools else []),
         )
 
-    return router
+    return router, wellknown_router
 
 
 def _parse_agent_identifier(value: str, registry_id: str) -> str:
@@ -241,9 +249,10 @@ class SmBridge:
             description="Does things"
         ))
 
-        # Mount the router
+        # Mount both routers
         app = FastAPI()
-        app.include_router(bridge.router)
+        app.include_router(bridge.router)             # /nanda/* endpoints
+        app.include_router(bridge.wellknown_router)    # /.well-known/nanda.json
     """
 
     def __init__(
@@ -254,7 +263,7 @@ class SmBridge:
         base_url: str | None = None,
         converter: AgentConverter | None = None,
         delta_store: DeltaStore | None = None,
-        tools: list[NandaTool] | None = None,
+        tools: list[SmTool] | None = None,
         namespaces: list[str] | None = None,
     ):
         """Initialize the NANDA bridge.
@@ -291,8 +300,8 @@ class SmBridge:
         # Store tools
         self.tools = tools or []
 
-        # Create router
-        self.router = create_sm_router(
+        # Create routers — main NANDA router + separate well-known router
+        self.router, self.wellknown_router = create_sm_router(
             converter=self.converter,
             delta_store=self.delta_store,
             registry_id=registry_id,
@@ -345,7 +354,7 @@ class SmBridge:
             if self.converter.is_public(agent):
                 self.delta_store.add("delete", sm_facts)
 
-    def add_tool(self, tool: NandaTool) -> None:
+    def add_tool(self, tool: SmTool) -> None:
         """Add an MCP tool to advertise."""
         self.tools.append(tool)
 
