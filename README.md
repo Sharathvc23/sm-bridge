@@ -54,17 +54,18 @@ bridge.register_agent(SimpleAgent(
     ]
 ))
 
-# Mount the router
+# Mount routers
 app = FastAPI()
-app.include_router(bridge.router)
+app.include_router(bridge.router)            # /nanda/* endpoints
+app.include_router(bridge.wellknown_router)   # /.well-known/nanda.json (RFC 8615)
 ```
 
 This gives you:
 
-- `GET /nanda/index` - List all public agents
+- `GET /nanda/index` - List all public agents (with correct `total_count` for pagination)
 - `GET /nanda/resolve?agent=my-agent` - Resolve a single agent
 - `GET /nanda/deltas?since=0` - Get changes for sync
-- `GET /nanda/.well-known/nanda.json` - Registry discovery
+- `GET /.well-known/nanda.json` - Registry discovery (RFC 8615 compliant)
 
 ### Custom Registry Integration
 
@@ -125,7 +126,7 @@ class MyRegistryConverter(AbstractAgentConverter):
 converter = MyRegistryConverter(db_connection)
 delta_store = DeltaStore()
 
-router = create_sm_router(
+nanda_router, wellknown_router = create_sm_router(
     converter=converter,
     delta_store=delta_store,
     registry_id="my-registry",
@@ -135,7 +136,8 @@ router = create_sm_router(
 )
 
 app = FastAPI()
-app.include_router(router)
+app.include_router(nanda_router)
+app.include_router(wellknown_router)
 ```
 
 ## Models
@@ -263,7 +265,7 @@ bridge = SmBridge(
 
 ## Registry Discovery
 
-The library automatically serves `/.well-known/nanda.json` for registry discovery:
+The library serves `/.well-known/nanda.json` at the domain root (RFC 8615) via the separate `wellknown_router`:
 
 ```json
 {
