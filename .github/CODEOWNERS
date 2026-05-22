@@ -1,0 +1,4 @@
+# CODEOWNERS — auto-routes review requests
+# Sharathvc23 is required reviewer on every change to main.
+
+* @Sharathvc23
