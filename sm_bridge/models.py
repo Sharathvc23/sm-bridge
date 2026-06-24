@@ -164,8 +164,9 @@ class SmAgentFacts(BaseModel):
     Implements the projnanda/agentfacts-format specification as deployed
     on list39.org and join39.org.
 
-    Required fields: id, agent_name, description, version, provider,
-                     endpoints, capabilities
+    Required fields (per agentfacts_schema.json): id, agent_name, label,
+                     description, version, provider, endpoints, capabilities,
+                     skills (minItems:1)
 
     The metadata field can contain registry-specific extensions using
     the x_<registry_name> convention (e.g., x_my_registry, x_acme).
@@ -179,9 +180,13 @@ class SmAgentFacts(BaseModel):
 
     # Basic info
     agent_name: str = Field(..., description="Human-readable agent name")
-    label: str | None = Field(None, description="Short label/category")
+    label: str = Field(..., description="Short label/category")
     description: str = Field(..., description="Agent description")
     version: str = Field(..., description="Agent version (semver recommended)")
+    documentationUrl: str | None = Field(None, description="URL to agent documentation")
+    jurisdiction: str | None = Field(
+        None, description="Country/entity that covers compliance for this agent"
+    )
 
     # Provider
     provider: SmProvider = Field(..., description="Provider information")
@@ -191,7 +196,9 @@ class SmAgentFacts(BaseModel):
 
     # Capabilities
     capabilities: SmCapabilities = Field(..., description="Agent capabilities")
-    skills: list[SmSkill] = Field(default_factory=list, description="Detailed skill definitions")
+    skills: list[SmSkill] = Field(
+        ..., min_length=1, description="Detailed skill definitions (at least one, per spec minItems:1)"
+    )
 
     # Trust & Verification (production NANDA fields)
     certification: SmCertification | None = Field(None, description="Trust certification")

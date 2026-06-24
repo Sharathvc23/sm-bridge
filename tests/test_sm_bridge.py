@@ -60,7 +60,7 @@ def _make_facts(agent_id: str = "test-agent") -> SmAgentFacts:
         provider=SmProvider(name="Test", url="https://test.com"),
         endpoints=SmEndpoints(static=[]),
         capabilities=SmCapabilities(modalities=[]),
-        skills=[],
+        skills=[SmSkill(id="test-skill", description="A test skill")],
     )
 
 
