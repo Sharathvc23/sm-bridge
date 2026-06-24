@@ -293,6 +293,37 @@ To join the NANDA network:
 3. Contact the MIT NANDA team to register as a federated peer
 4. (Optional) Implement Quilt-compatible sync or gossip mechanisms for real-time or near-real-time federation
 
+## AI-Catalog gateway (border layer)
+
+sm-bridge's native surface (`/nanda/*`, AgentFacts) is the list39 lineage. The current
+MIT reference index (`nanda-index-v2`) instead resolves through the **AI-Catalog**
+convention — a `hosting_path=registry` org is dereferenced via
+`GET {registry_url}/agents/{id}` → `CatalogEntry` → an A2A AgentCard leaf.
+
+`create_gateway_router` is the optional **border node** that makes a sm-bridge registry
+reachable from that index *without changing the core*. It reads the registry's current
+state folded from the `DeltaStore` (so it tracks whatever the federation syncs in) and
+translates each `SmAgentFacts` into the AI-Catalog + A2A-card shapes. Mount it alongside
+`create_sm_router` — the `/nanda/*` surface is untouched:
+
+```python
+from fastapi import FastAPI
+from sm_bridge import DeltaStore, create_gateway_router
+
+delta_store = DeltaStore()  # the same store your /nanda/deltas sync feeds
+
+app = FastAPI()
+app.include_router(
+    create_gateway_router(delta_store, base_url="https://reg.example.com", domain="example.com")
+)
+```
+
+Serves `GET /.well-known/ai-catalog.json`, `GET /agents/{slug}` (CatalogEntry), and
+`GET /cards/{slug}.json` (A2A AgentCard; the native AgentFacts rides along in `_meta`).
+Register the instance into `nanda-index-v2` as `hosting_path=registry` with
+`registry_url` = `base_url`, and a cold `urn` resolves through the public index into your
+registry. One border node fronts the whole federated mesh.
+
 ## Related Packages
 
 | Package | Question it answers |

@@ -27,6 +27,14 @@ See https://github.com/projnanda for the official NANDA specification.
 """
 
 from .converter import AbstractAgentConverter, AgentConverter, SimpleAgent, SimpleAgentConverter
+from .gateway import (
+    A2AAgentCard,
+    CatalogDocument,
+    CatalogEntry,
+    create_gateway_router,
+    current_facts,
+    default_slug,
+)
 from .models import (
     SmA2AMessage,
     SmAdaptiveResolver,
@@ -84,4 +92,11 @@ __all__ = [
     # Router
     "create_sm_router",
     "SmBridge",
+    # AI-Catalog gateway (border layer)
+    "create_gateway_router",
+    "current_facts",
+    "default_slug",
+    "CatalogEntry",
+    "CatalogDocument",
+    "A2AAgentCard",
 ]
