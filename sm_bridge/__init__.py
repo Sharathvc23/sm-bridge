@@ -27,6 +27,7 @@ See https://github.com/projnanda for the official NANDA specification.
 """
 
 from .converter import AbstractAgentConverter, AgentConverter, SimpleAgent, SimpleAgentConverter
+from .federation import FederationPoller, PullResult, pull_deltas
 from .gateway import (
     A2AAgentCard,
     CatalogDocument,
@@ -99,4 +100,8 @@ __all__ = [
     "CatalogEntry",
     "CatalogDocument",
     "A2AAgentCard",
+    # Federation sync client
+    "pull_deltas",
+    "PullResult",
+    "FederationPoller",
 ]
