@@ -27,6 +27,8 @@ Tests for sm-bridge
 
 from sm_bridge import (
     DeltaStore,
+    SimpleAgent,
+    SimpleAgentConverter,
     SmAgentFacts,
     SmBridge,
     SmCapabilities,
@@ -34,8 +36,6 @@ from sm_bridge import (
     SmProvider,
     SmSkill,
     SmWellKnown,
-    SimpleAgent,
-    SimpleAgentConverter,
 )
 
 from .conftest import (

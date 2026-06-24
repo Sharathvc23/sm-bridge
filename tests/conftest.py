@@ -9,9 +9,9 @@ import pytest
 
 from sm_bridge import (
     DeltaStore,
-    SmBridge,
     SimpleAgent,
     SimpleAgentConverter,
+    SmBridge,
 )
 
 # ---------------------------------------------------------------------------
