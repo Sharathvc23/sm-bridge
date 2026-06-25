@@ -1,5 +1,9 @@
 # SM Bridge
 
+[![PyPI](https://img.shields.io/pypi/v/sm-bridge.svg)](https://pypi.org/project/sm-bridge/)
+[![Python](https://img.shields.io/pypi/pyversions/sm-bridge.svg)](https://pypi.org/project/sm-bridge/)
+[![License](https://img.shields.io/pypi/l/sm-bridge.svg)](./LICENSE)
+
 A Python library for building NANDA-compatible AI agent registries.
 
 **[NANDA](https://projectnanda.org)** (Network of AI Agents in Decentralized Architecture) is the protocol for federated AI agent discovery and communication. This library provides the primitives needed to make your agent registry interoperable with the NANDA ecosystem.
@@ -14,7 +18,13 @@ A Python library for building NANDA-compatible AI agent registries.
 ## Installation
 
 ```bash
-pip install git+https://github.com/Sharathvc23/sm-bridge.git
+pip install sm-bridge
+```
+
+The delta sync client's default HTTP transport is an optional extra:
+
+```bash
+pip install "sm-bridge[federation]"
 ```
 
 Or install from source:
