@@ -5,7 +5,7 @@ NANDA (Network of AI Agents in Decentralized Architecture) is MIT Media Lab's
 protocol for federated AI agent discovery and communication.
 
 This library provides:
-- Pydantic models matching the NANDA AgentFacts schema (list39.org compatible)
+- Pydantic models matching the NANDA AgentFacts schema
 - FastAPI router with standard NANDA endpoints
 - Simple delta store for change tracking
 - Abstract interfaces for custom registry integration
@@ -27,6 +27,15 @@ See https://github.com/projnanda for the official NANDA specification.
 """
 
 from .converter import AbstractAgentConverter, AgentConverter, SimpleAgent, SimpleAgentConverter
+from .federation import FederationPoller, PullResult, pull_deltas
+from .gateway import (
+    A2AAgentCard,
+    CatalogDocument,
+    CatalogEntry,
+    create_gateway_router,
+    current_facts,
+    default_slug,
+)
 from .models import (
     SmA2AMessage,
     SmAdaptiveResolver,
@@ -84,4 +93,15 @@ __all__ = [
     # Router
     "create_sm_router",
     "SmBridge",
+    # AI Catalog gateway
+    "create_gateway_router",
+    "current_facts",
+    "default_slug",
+    "CatalogEntry",
+    "CatalogDocument",
+    "A2AAgentCard",
+    # Federation sync client
+    "pull_deltas",
+    "PullResult",
+    "FederationPoller",
 ]

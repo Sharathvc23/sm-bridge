@@ -45,11 +45,13 @@ integrity = ["sm-model-integrity-layer>=0.1.0"]
 governance = ["sm-model-governance>=0.1.0"]
 card = ["sm-model-card>=0.1.0"]
 provenance = ["sm-model-provenance>=0.1.0"]
+federation = ["httpx>=0.24.0"]
 all = [
     "sm-model-integrity-layer>=0.1.0",
     "sm-model-governance>=0.1.0",
     "sm-model-card>=0.1.0",
     "sm-model-provenance>=0.1.0",
+    "httpx>=0.24.0",
 ]
 dev = [
     "pytest>=7.0.0",

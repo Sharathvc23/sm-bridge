@@ -291,7 +291,34 @@ To join the NANDA network:
 1. Deploy your registry with the NANDA bridge endpoints
 2. Ensure `/.well-known/nanda.json` is accessible
 3. Contact the MIT NANDA team to register as a federated peer
-4. (Optional) Implement Quilt-compatible sync or gossip mechanisms for real-time or near-real-time federation
+4. (Optional) Implement incremental sync or gossip mechanisms for real-time or near-real-time federation
+
+## AI Catalog gateway
+
+`create_gateway_router` serves the AI Catalog discovery endpoints for the agents in a
+`DeltaStore`, alongside the `/nanda/*` router (the two surfaces are independent):
+
+```python
+from fastapi import FastAPI
+from sm_bridge import DeltaStore, create_gateway_router
+
+delta_store = DeltaStore()
+
+app = FastAPI()
+app.include_router(
+    create_gateway_router(delta_store, base_url="https://reg.example.com", domain="example.com")
+)
+```
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /.well-known/ai-catalog.json` | `CatalogDocument` — all agents |
+| `GET /agents/{slug}` | `CatalogEntry` — a pointer to the agent's card |
+| `GET /cards/{slug}.json` | A2A `AgentCard` (full `SmAgentFacts` included under `_meta`) |
+
+Each `SmAgentFacts` is translated into a `CatalogEntry` and an A2A `AgentCard` whose `url`
+is the agent's runtime. Point a NANDA index at `base_url` (as a `hosting_path=registry`
+entry) to make the agents discoverable through the AI Catalog flow.
 
 ## Related Packages
 

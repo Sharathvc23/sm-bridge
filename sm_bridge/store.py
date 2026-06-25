@@ -2,7 +2,7 @@
 NANDA Delta Store
 
 Simple in-memory delta store for tracking agent changes.
-Provides the foundation for NANDA Quilt sync protocol.
+Provides the foundation for registry-to-registry delta sync.
 
 For production use, extend this class to persist deltas to a database.
 """

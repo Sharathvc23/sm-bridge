@@ -161,8 +161,7 @@ class SmAgentFacts(BaseModel):
     """NANDA-compliant AgentFacts schema.
 
     This is the core data structure for agent metadata in the NANDA ecosystem.
-    Implements the projnanda/agentfacts-format specification as deployed
-    on list39.org and join39.org.
+    Implements the projnanda/agentfacts-format specification.
 
     Required fields (per agentfacts_schema.json): id, agent_name, label,
                      description, version, provider, endpoints, capabilities,
@@ -303,7 +302,7 @@ class SmWellKnown(BaseModel):
     )
 
     # Federation
-    peers: list[str] | None = Field(None, description="Peer registry URLs for Quilt federation")
+    peers: list[str] | None = Field(None, description="Peer registry URLs for federation sync")
 
 
 class SmTool(BaseModel):
