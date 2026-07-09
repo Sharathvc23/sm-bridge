@@ -61,6 +61,15 @@ sm-bridge verify delegation  --evidence delegation-bundle.json
 
 Exit code `0` = VERIFIED, `1` = FAILED, `2` = NOT_VERIFIED.
 
+### Runnable demos
+
+Two offline, self-contained scenarios (see [`examples/`](examples/)):
+
+```bash
+python examples/demo1_switchboard.py            # one query → an ANS registry (delegated) + a non-ANS catalog (verified)
+python examples/demo2_domainless_delegation.py  # a domainless did:key earns scoped, revocable delegation
+```
+
 ## Installation
 
 ```bash

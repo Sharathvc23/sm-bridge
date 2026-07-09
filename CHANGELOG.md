@@ -23,6 +23,13 @@ normalized, verifiable proof block, while the Index stays strictly pointer-only.
 - **Cross-registry switchboard** (`sm_bridge.switchboard`): one resolve surfaces agents from
   heterogeneous registries through a uniform result — entry-mode registries delegate,
   hosting-mode registries resolve locally with a verified proof. One entry per registry.
+- **`sm-bridge verify` CLI**: verify a receipt / signed catalog / agent card / DNS-AID record /
+  delegation from the terminal (exit 0 = VERIFIED, 1 = FAILED, 2 = NOT_VERIFIED).
+- **Runnable demos** (`examples/`): the cross-registry switchboard and domainless-delegation
+  scenarios, offline and self-contained.
+- **Bidirectional ANS interop, verified against the real reference binaries**: a receipt sm-bridge
+  produces is accepted by `ans-verify`, and a receipt the real `ans-tl` transparency log produces
+  is verified by the `ans-scitt` profile (baked in as a fixture that runs without a Go toolchain).
 - **Dual onboarding modes** (`sm_bridge.onboarding`): `RegistryEntry`, the `EntryModeConverter`
   protocol (no agent-iteration — quilt invariant enforced structurally), `ANSEntryConverter`,
   and `/nanda/registries` + entry-mode delegation-resolve router surface. `reliability_receipts`
