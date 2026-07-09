@@ -117,3 +117,15 @@ async def test_real_package_importable_and_wired():
 
     v = _default_verifier()
     assert callable(v)
+
+
+@pytest.mark.asyncio
+async def test_real_dns_aid_integration_maps_absent_record_to_not_verified():
+    # Drive the ACTUAL dns_aid.verify (no injected fake) against a guaranteed-nonexistent
+    # DNS-AID name. The real VerifyResult (no record — or a lookup that can't complete
+    # offline) must map to an honest NOT_VERIFIED, never a fabricated pass. Proves the
+    # consume-upstream wiring works against the real library's output shape.
+    fqdn = "no-such-agent.invalid-dns-aid-interop-check.example"
+    out = await DnsAidProfile().verify(None, {"fqdn": fqdn})
+    assert out.status is ProofStatus.NOT_VERIFIED
+    assert out.evidence_ref is None

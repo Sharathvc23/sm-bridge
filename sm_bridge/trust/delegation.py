@@ -326,6 +326,7 @@ class NandaDelegationProfile:
 
     profile_id = "nanda-delegation"
     _METHOD = "delegation-chain"
+    _MAX_CHAIN = 64  # DoS bound on chain length (real chains are a few hops deep)
 
     async def verify(self, subject: Any, evidence: dict[str, Any]) -> ProofResult:
         # ---- (0) evidence presence — can we even attempt a check? -------------------
@@ -335,6 +336,14 @@ class NandaDelegationProfile:
                 profile=self.profile_id,
                 method=self._METHOD,
                 reason="no delegation chain supplied",
+            )
+        # DoS guard: a legitimate delegation chain is short (a handful of hops). Reject an
+        # absurdly long chain before doing per-hop signature verification.
+        if len(chain) > self._MAX_CHAIN:
+            return ProofResult.failed(
+                profile=self.profile_id,
+                method=self._METHOD,
+                reason=f"delegation chain length {len(chain)} exceeds cap {self._MAX_CHAIN} (DoS guard)",
             )
         signatures = evidence.get("signatures")
         if not isinstance(signatures, dict):

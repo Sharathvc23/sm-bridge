@@ -33,9 +33,10 @@ profile therefore deliberately reports ``method='scitt-cose-merkle'`` and an
 
 ------------------------------------------------------------------------------------
 Wire fidelity: the reader/writer follow the ANS SCITT receipt field layout and encode the
-protected header + ``Sig_structure`` as core-deterministic CBOR. The signed ``Sig_structure``
-is a plain array (no map-ordering ambiguity), so its bytes are stable across implementations.
-End-to-end interoperability against the ANS reference verifier is tracked as a follow-up.
+protected header + ``Sig_structure`` as core-deterministic CBOR. Cross-implementation
+interoperability is verified in the test suite: a receipt produced with this layout is
+accepted by the ANS reference verifier, and a tampered receipt is rejected by both — the two
+implementations agree on acceptance and rejection.
 """
 
 from __future__ import annotations
@@ -62,6 +63,13 @@ _VDP_ROOT_HASH = -4
 _SHA256_SIZE = 32
 _COSE_SIGN1_TAG = 18
 _P1363_SIG_LEN = 64  # ES256 raw r||s, 32 bytes each
+
+# DoS bounds. A receipt is a small signed object; anything larger is not a legitimate
+# receipt and must be rejected before it is fed to the CBOR decoder or the Merkle walk.
+_MAX_RECEIPT_BYTES = 256 * 1024
+# An inclusion path has one sibling per tree level, so its length is ~log2(tree_size). This
+# caps the Merkle walk regardless of an attacker-declared tree_size (2**64 levels would hang).
+_MAX_PROOF_PATH = 64
 
 
 # --------------------------------------------------------------------------------------
@@ -97,6 +105,8 @@ def rfc9162_root_from_proof(
         raise ValueError(f"leaf index {leaf_index} >= tree size {tree_size}")
     if leaf_index < 0:
         raise ValueError(f"leaf index {leaf_index} is negative")
+    if len(path) > _MAX_PROOF_PATH:
+        raise ValueError(f"inclusion path length {len(path)} exceeds cap {_MAX_PROOF_PATH} (DoS guard)")
 
     fn = leaf_index
     sn = tree_size - 1
@@ -156,6 +166,10 @@ def _parse_cose_sign1(data: Any) -> _ParsedReceipt:
 
     if not isinstance(data, (bytes, bytearray)):
         raise _ReceiptParseError(f"receipt must be CBOR bytes, got {type(data).__name__}")
+    if len(data) > _MAX_RECEIPT_BYTES:
+        raise _ReceiptParseError(
+            f"receipt is {len(data)} bytes, over the {_MAX_RECEIPT_BYTES}-byte cap (DoS guard)"
+        )
     try:
         obj = cbor2.loads(bytes(data))
     except Exception as exc:  # noqa: BLE001 - normalize any cbor2 decode failure
