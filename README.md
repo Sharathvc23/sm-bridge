@@ -14,6 +14,61 @@ A Python library for building NANDA-compatible AI agent registries.
 - **FastAPI Router** - Drop-in endpoints for `/nanda/index`, `/nanda/resolve`, `/nanda/deltas`
 - **Delta Store** - Change tracking for registry synchronization
 - **Converter Interface** - Abstract pattern for integrating with your existing registry
+- **Trust profiles (v0.4)** - Verify heterogeneous sources (ed25519 agent-card, ANS/SCITT, DNS-AID, delegation) and normalize to one proof block ([`docs/trust-profiles.md`](docs/trust-profiles.md))
+- **Quilt onboarding (v0.4)** - Entry mode (pointer-only, quilt-safe) vs hosting mode ([`docs/quilt-onboarding.md`](docs/quilt-onboarding.md))
+- **Transparency log (v0.4)** - RFC 6962 Merkle + signed checkpoint; pass your own conformance auditor
+
+## Universal onboarding + verification (v0.4) — 5-minute path
+
+```bash
+pip install "sm-bridge[trust]"     # verification adapters (crypto in extras; core stays fastapi+pydantic)
+```
+
+```python
+from sm_bridge import SmBridge, SimpleAgent, SimpleAgentConverter, ANSEntryConverter, TrustRegistry
+from sm_bridge.trust.ed25519_agentcard import Ed25519AgentCardProfile
+from sm_bridge.trust.ans_scitt import AnsScittProfile
+
+# Hosting mode (a source with no registry of its own) + entry mode (a registry-scale source)
+conv = SimpleAgentConverter(registry_id="quilt", provider_name="Q", provider_url="https://q.example")
+conv.register(SimpleAgent(id="finance", name="Finance Agent", description="does finance"))
+
+bridge = SmBridge(
+    registry_id="quilt", provider_name="Q", provider_url="https://q.example",
+    converter=conv,
+    trust_registry=TrustRegistry([Ed25519AgentCardProfile(), AnsScittProfile()]),
+    entries=[ANSEntryConverter(registry_name="acme-ans", resolver_endpoint="https://ans.acme.example")],
+)
+# /nanda/resolve → SmAgentFacts + a normalized proof block
+# /nanda/registries/acme-ans/resolve → a delegation pointer (the quilt never mirrors ANS's agents)
+```
+
+Every `VERIFIED` is a real signature / DNS / Merkle check; absent live infra you get an honest
+`NOT_VERIFIED(reason)`, never a mocked pass. See [`docs/trust-profiles.md`](docs/trust-profiles.md)
+and [`docs/quilt-onboarding.md`](docs/quilt-onboarding.md).
+
+### Command line
+
+The same verification is available from the terminal (`[trust]` extra):
+
+```bash
+sm-bridge verify ans-scitt   --receipt receipt.cbor --root-keys root-keys.txt
+sm-bridge verify jws-catalog --catalog ai-catalog.json --signature sig.jws --jwks jwks.json
+sm-bridge verify agent-card  --card card.json --signature-b64 <b64> --pubkey key.pem
+sm-bridge verify dns-aid     --fqdn agent.example.com [--dane]
+sm-bridge verify delegation  --evidence delegation-bundle.json
+```
+
+Exit code `0` = VERIFIED, `1` = FAILED, `2` = NOT_VERIFIED.
+
+### Runnable demos
+
+Two offline, self-contained scenarios (see [`examples/`](examples/)):
+
+```bash
+python examples/demo1_switchboard.py            # one query → an ANS registry (delegated) + a non-ANS catalog (verified)
+python examples/demo2_domainless_delegation.py  # a domainless did:key earns scoped, revocable delegation
+```
 
 ## Installation
 

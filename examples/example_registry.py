@@ -11,9 +11,9 @@ Run with:
 from fastapi import FastAPI
 
 from sm_bridge import (
+    SimpleAgent,
     SmBridge,
     SmTool,
-    SimpleAgent,
 )
 
 # Create the NANDA bridge

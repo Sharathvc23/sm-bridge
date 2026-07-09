@@ -26,8 +26,39 @@ from typing import Any
 
 from .models import SmAgentFacts
 from .store import DeltaStore
+from .trust.base import ProofResult
 
 Fetch = Callable[[str], dict[str, Any]]
+# A caller-supplied local re-verifier: given the inbound agent + its raw delta, return a
+# ProofResult this registry actually computed (or None to fall through to the safe default).
+Reverify = Callable[[SmAgentFacts, dict[str, Any]], "ProofResult | None"]
+
+
+def _resolve_inbound_proof(
+    agent: SmAgentFacts,
+    delta: dict[str, Any],
+    reverify: Reverify | None,
+    trust_peer_proof: bool,
+) -> ProofResult | None:
+    """Decide the proof for an ingested delta.
+
+    A peer's ``proof`` is the peer's *claim*, not something this registry verified — so by
+    default it is NOT propagated as-is (that would launder an unverified VERIFIED into our
+    index). Order: a caller-supplied local ``reverify`` wins; else, if the operator has
+    explicitly chosen to trust this peer, keep the peer's proof; else downgrade to an honest
+    NOT_VERIFIED.
+    """
+    if reverify is not None:
+        result = reverify(agent, delta)
+        if result is not None:
+            return result
+    if trust_peer_proof:
+        return agent.proof
+    return ProofResult.not_verified(
+        profile="federation",
+        method="federation-ingest",
+        reason="proof asserted by a federated peer; not re-verified by this registry",
+    )
 
 
 @dataclass(frozen=True)
@@ -64,6 +95,8 @@ def pull_deltas(
     *,
     fetch: Fetch | None = None,
     timeout: float = 10.0,
+    reverify: Reverify | None = None,
+    trust_peer_proof: bool = False,
 ) -> PullResult:
     """Pull a peer's deltas since ``since`` and apply them into ``store``.
 
@@ -73,6 +106,12 @@ def pull_deltas(
         since: peer sequence cursor — only deltas with ``seq > since`` are returned.
         fetch: transport ``(url) -> json dict``; defaults to an httpx GET.
         timeout: request timeout for the default transport.
+        reverify: optional local re-verifier ``(agent, delta) -> ProofResult | None``.
+            When it returns a ProofResult, that (locally computed) proof is stored. Use this
+            to re-verify a peer's record against transported evidence.
+        trust_peer_proof: opt-in to keep a peer's ``proof`` claim verbatim. Default ``False``
+            — a peer's proof is downgraded to NOT_VERIFIED so a federated ``VERIFIED`` claim
+            is never laundered into this registry. Only enable for a peer you fully trust.
 
     Returns:
         :class:`PullResult` with the number applied and the new cursor (the highest
@@ -86,6 +125,8 @@ def pull_deltas(
     applied = 0
     for delta in data.get("deltas", []):
         agent = SmAgentFacts.model_validate(delta["agent"])
+        # Never re-serve a peer's proof claim as our own verification.
+        agent.proof = _resolve_inbound_proof(agent, delta, reverify, trust_peer_proof)
         store.add(str(delta["action"]), agent)
         cursor = max(cursor, int(delta["seq"]))
         applied += 1
@@ -114,18 +155,29 @@ class FederationPoller:
         interval: float = 30.0,
         since: int = 0,
         fetch: Fetch | None = None,
+        reverify: Reverify | None = None,
+        trust_peer_proof: bool = False,
     ) -> None:
         self.peer_url = peer_url
         self.store = store
         self.interval = interval
         self.since = since
         self._fetch = fetch
+        self._reverify = reverify
+        self._trust_peer_proof = trust_peer_proof
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def sync_once(self) -> PullResult:
         """Run a single pull and advance the cursor."""
-        result = pull_deltas(self.peer_url, self.store, self.since, fetch=self._fetch)
+        result = pull_deltas(
+            self.peer_url,
+            self.store,
+            self.since,
+            fetch=self._fetch,
+            reverify=self._reverify,
+            trust_peer_proof=self._trust_peer_proof,
+        )
         self.since = result.cursor
         return result
 

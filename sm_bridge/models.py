@@ -12,7 +12,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from sm_bridge.trust.base import ProofResult
 
 
 class SmProvider(BaseModel):
@@ -209,10 +211,26 @@ class SmAgentFacts(BaseModel):
         default_factory=dict, description="Registry-specific extensions (use x_<registry> prefix)"
     )
 
-    # Optional proof / attestation
-    proof: dict[str, Any] | None = Field(
-        None, description="Optional attestation payload (e.g., hash/signature metadata)"
+    # Optional proof / attestation — a normalized ProofResult (v0.4+).
+    # Back-compat: a pre-v0.4 opaque dict is accepted and downgraded to
+    # NOT_VERIFIED(legacy-unverified) rather than silently trusted, so a legacy payload can
+    # never masquerade as a verified one.
+    proof: ProofResult | None = Field(
+        None, description="Normalized trust proof block (see sm_bridge.trust.ProofResult)"
     )
+
+    @field_validator("proof", mode="before")
+    @classmethod
+    def _coerce_legacy_proof(cls, v: Any) -> Any:
+        if v is None or isinstance(v, ProofResult):
+            return v
+        if isinstance(v, dict):
+            # A ProofResult serialized back in (round-trip) still has these keys — let it
+            # validate normally. A legacy/opaque dict lacks them → downgrade honestly.
+            if {"profile", "method", "status"} <= set(v):
+                return v
+            return ProofResult.legacy()
+        return v
 
     @classmethod
     def create_handle(cls, registry: str, namespace: str, agent_id: str) -> str:

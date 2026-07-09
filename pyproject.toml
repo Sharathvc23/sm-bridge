@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sm-bridge"
-version = "0.3.1"
+version = "0.4.0"
 description = "A Python library for building NANDA-compatible AI agent registries"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "StellarMinds", email = "hello@stellarminds.ai" }
 ]
@@ -46,6 +46,20 @@ governance = ["sm-model-governance>=0.1.0"]
 card = ["sm-model-card>=0.1.0"]
 provenance = ["sm-model-provenance>=0.1.0"]
 federation = ["httpx>=0.24.0"]
+# Trust-profile verification adapters (ed25519 agent-card, ANS/SCITT, DNS-AID, delegation).
+# Core never imports these — profiles import them lazily.
+trust = [
+    "cryptography>=42.0.0",
+    "cbor2>=5.6.0",
+    "dnspython>=2.6.0",
+    # Real DNS-AID (IETF draft-mozleywilliams-dnsop-dnsaid) reference impl — the DnsAidProfile
+    # is a thin adapter over its verifier (SVCB + DNSSEC + DANE). Distinct from ANS _ans TXT.
+    "dns-aid>=0.26.0",
+]
+# Transparency-log extra: RFC 6962 Merkle over the delta log + signed checkpoints.
+tlog = [
+    "cryptography>=42.0.0",
+]
 all = [
     "sm-model-integrity-layer>=0.1.0",
     "sm-model-governance>=0.1.0",
@@ -59,7 +73,11 @@ dev = [
     "httpx>=0.24.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "hypothesis>=6.100.0",
 ]
+
+[project.scripts]
+sm-bridge = "sm_bridge.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Sharathvc23/sm-bridge"
