@@ -84,6 +84,37 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
+class TamperedCatalogConverter(SimpleAgentConverter):
+    """A hostile/broken source: it presents a signature that does NOT match the card."""
+
+    def trust_evidence(self, agent):
+        facts = self.to_sm(agent)
+        payload = facts.model_dump(mode="json", exclude_none=True)
+        payload.pop("proof", None)
+        # sign a DIFFERENT payload → the signature will not verify over the real card
+        forged = _SIGNING_KEY.sign(canonicalize({"not": "the real card"}))
+        return (
+            "ed25519-agentcard",
+            {"payload": payload, "signature_b64": base64.b64encode(forged).decode(),
+             "public_key": _SIGNING_KEY.public_key().public_bytes_raw()},
+        )
+
+
+def _adversarial_client() -> TestClient:
+    conv = TamperedCatalogConverter(
+        registry_id="catalog", provider_name="Catalog Co", provider_url="https://cat.example",
+        base_url="https://cat.example",
+    )
+    conv.register(SimpleAgent(id="finance", name="Finance Agent", description="does finance", public=True))
+    bridge = SmBridge(
+        registry_id="catalog", provider_name="Catalog Co", provider_url="https://cat.example",
+        converter=conv, trust_registry=TrustRegistry([Ed25519AgentCardProfile()]),
+    )
+    app = FastAPI()
+    app.include_router(bridge.router)
+    return TestClient(app)
+
+
 # ------------------------------------------------------------------------------------
 # Hosting-mode: index -> resolve -> a genuinely VERIFIED ed25519 proof block
 # ------------------------------------------------------------------------------------
@@ -101,6 +132,17 @@ def test_hosting_all_hops_index_then_resolve_verified():
     assert r["proof"]["status"] == "VERIFIED"
     assert r["proof"]["profile"] == "ed25519-agentcard"
     assert r["proof"]["evidence_ref"].startswith("ed25519:")
+
+
+def test_hosting_forged_card_resolves_to_failed_proof_over_the_wire():
+    # The adversarial counterpart to the happy path: a forged signature must surface as a
+    # FAILED proof block through the actual HTTP resolve endpoint, not a VERIFIED one.
+    r = _adversarial_client().get("/nanda/resolve", params={"agent": "finance"})
+    assert r.status_code == 200  # the agent still resolves…
+    proof = r.json()["proof"]
+    assert proof["status"] == "FAILED"  # …but its proof is honestly FAILED, never VERIFIED
+    assert proof["profile"] == "ed25519-agentcard"
+    assert "VERIFIED" not in proof["status"]
 
 
 def test_ai_catalog_surface_is_spec_shaped():
