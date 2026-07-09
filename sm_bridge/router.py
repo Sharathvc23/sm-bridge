@@ -374,6 +374,23 @@ class SmBridge:
             entries=self.entries,
         )
 
+    async def admit_entries(self, *, require_verified: bool = False) -> list[RegistryEntry]:
+        """Verify every entry-mode source at onboarding and stamp each entry's proof.
+
+        Uses this bridge's ``trust_registry``. With ``require_verified=True`` a source that
+        fails admission raises ``AdmissionError`` and does not join. Call once after wiring
+        (or admit converters individually before constructing the bridge).
+        """
+        if self.trust_registry is None:
+            return [c.to_entry() for c in self.entries]
+        admitted: list[RegistryEntry] = []
+        for conv in self.entries:
+            admit = getattr(conv, "admit", None)
+            if callable(admit):
+                await admit(self.trust_registry, require_verified=require_verified)
+            admitted.append(conv.to_entry())
+        return admitted
+
     def register_agent(self, agent: Any) -> SmAgentFacts:
         """Register an agent and record a delta.
 

@@ -56,6 +56,7 @@ from .models import (
     SmWellKnown,
 )
 from .onboarding import (
+    AdmissionError,
     ANSEntryConverter,
     DelegationResolution,
     EntryModeConverter,
@@ -125,6 +126,7 @@ __all__ = [
     "RegistryEntry",
     "EntryModeConverter",
     "ANSEntryConverter",
+    "AdmissionError",
     "DelegationResolution",
     "normalize_reliability_receipts",
 ]

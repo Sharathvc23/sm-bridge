@@ -1,9 +1,25 @@
 # Quilt onboarding — entry mode vs hosting mode
 
-The NANDA Index is a **quilt**: a pointer-only index that stitches together many independent
-registries, never a database that swallows their agents. sm-bridge onboards any source
-through one of two modes, deliberately different in *shape* so the quilt invariant is
-enforced structurally.
+The NANDA Index is the **switchboard**: a pointer-only quilt that stitches together many
+independent registries, never a database that swallows their agents. sm-bridge is the
+**onboarding tool** anyone uses to join the index. It onboards a source through one of two
+modes, deliberately different in *shape* so the quilt invariant is enforced structurally.
+
+## Verify at admission, delegate at resolution
+
+Verification is an **onboarding-time** concern, not a resolution-time one. When a
+registry-scale source joins, the bridge verifies its attestation **once** (`admit`) and
+stamps the result into the entry's `proof`; the index then holds the pointer and **delegates
+resolution back to the source**. The index never re-verifies a source's live records — the
+source serves and verifies its own. Resolving an agent under an entry returns a delegation
+pointer, not a verified mirror.
+
+```python
+conv = ANSEntryConverter(registry_name="acme-ans", resolver_endpoint="https://ans.acme.example",
+                         trust_profile="ans-scitt", admission_evidence={...})
+bridge = SmBridge(..., trust_registry=registry, entries=[conv])
+await bridge.admit_entries(require_verified=True)   # verify once at join; refuse if unattested
+```
 
 ## Decision table
 

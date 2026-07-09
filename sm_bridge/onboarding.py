@@ -15,6 +15,11 @@ Two ways a source joins the quilt, deliberately different in *shape*:
 
 Choosing: if the source already runs a registry/resolver, use entry mode. If it does not,
 use hosting mode. Never per-agent-flatten a source that has its own registry.
+
+Verification is an **admission** concern. The bridge (the onboarding tool) verifies a source
+once at join via ``admit`` and stamps ``RegistryEntry.proof``; the index (the switchboard)
+then holds the pointer and delegates resolution — it never re-verifies a source's live
+records.
 """
 
 from __future__ import annotations
@@ -24,7 +29,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
-from sm_bridge.trust.base import ProofResult
+from sm_bridge.trust.base import ProofResult, ProofStatus, TrustRegistry
+
+
+class AdmissionError(Exception):
+    """A registry-scale source failed admission verification at onboarding."""
 
 
 class RegistryEntry(BaseModel):
@@ -96,11 +105,22 @@ class EntryModeConverter(Protocol):
     """
 
     def to_entry(self) -> RegistryEntry:
-        """Produce the single quilt entry for this source."""
+        """Produce the single quilt entry for this source (carrying its admission proof)."""
         ...
 
     def delegate(self, agent: str) -> DelegationResolution:
         """Return a delegation pointer for resolving ``agent`` at the source's resolver."""
+        ...
+
+    async def admit(
+        self, trust_registry: TrustRegistry, *, require_verified: bool = False
+    ) -> ProofResult:
+        """Verify the source's attestation ONCE at onboarding and stamp the entry's proof.
+
+        This is the switchboard/bridge split made concrete: the bridge (onboarding tool)
+        verifies a source at admission time; the index (switchboard) then holds the pointer
+        and delegates resolution back to the source — it never re-verifies live records.
+        """
         ...
 
 
@@ -123,6 +143,7 @@ class ANSEntryConverter:
         media_type: str = "application/scitt-receipt+cose",
         trust_profile: str = "ans-scitt",
         metadata: dict[str, Any] | None = None,
+        admission_evidence: dict[str, Any] | None = None,
     ) -> None:
         self._registry_name = registry_name
         self._resolver_endpoint = resolver_endpoint.rstrip("/")
@@ -132,6 +153,10 @@ class ANSEntryConverter:
         self._media_type = media_type
         self._trust_profile = trust_profile
         self._metadata = metadata or {}
+        # Evidence proving the source controls this registry (e.g. a signed attestation /
+        # receipt over the entry's identity). Verified ONCE at admission by `admit`.
+        self._admission_evidence = admission_evidence
+        self._proof: ProofResult | None = None
 
     def to_entry(self) -> RegistryEntry:
         return RegistryEntry(
@@ -144,7 +169,35 @@ class ANSEntryConverter:
             conformance_level="auditable" if self._tl_checkpoint and self._root_keys else "basic",
             trust_profile=self._trust_profile,
             metadata=self._metadata,
+            proof=self._proof,
         )
+
+    async def admit(
+        self, trust_registry: TrustRegistry, *, require_verified: bool = False
+    ) -> ProofResult:
+        """Verify the source's attestation once and stamp the entry's proof.
+
+        With no admission evidence, the entry is stamped NOT_VERIFIED (honest — it joined
+        unattested). With ``require_verified=True``, a non-VERIFIED outcome raises
+        :class:`AdmissionError` so the source cannot join the index unattested.
+        """
+        if self._trust_profile and self._admission_evidence is not None:
+            proof = await trust_registry.verify(
+                self._trust_profile, self.to_entry(), self._admission_evidence
+            )
+        else:
+            proof = ProofResult.not_verified(
+                profile=self._trust_profile or "entry",
+                method="admission",
+                reason="no admission evidence supplied; source joined unattested",
+            )
+        if require_verified and proof.status is not ProofStatus.VERIFIED:
+            raise AdmissionError(
+                f"registry '{self._registry_name}' failed admission verification: "
+                f"{proof.failure_reason}"
+            )
+        self._proof = proof
+        return proof
 
     def delegate(self, agent: str) -> DelegationResolution:
         return DelegationResolution(
@@ -180,5 +233,6 @@ __all__ = [
     "DelegationResolution",
     "EntryModeConverter",
     "ANSEntryConverter",
+    "AdmissionError",
     "normalize_reliability_receipts",
 ]
