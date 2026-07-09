@@ -1,6 +1,6 @@
 """Red-team tests for the delegation-chain trust profile.
 
-Every test mints **real** Ed25519 keys, signs credentials with them, and drives the
+Every test mints **real** P-256 keys, signs credentials with them, and drives the
 profile end-to-end. Honest chains must VERIFY; every attack (scope escalation, over-depth,
 bad windows, revocation, stale token, forged signature) must be rejected as FAILED with a
 reason that names the fault; missing evidence must be an honest NOT_VERIFIED — never a pass.
@@ -12,15 +12,15 @@ import copy
 from datetime import datetime, timezone
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from sm_bridge.trust.base import ProofStatus
 from sm_bridge.trust.delegation import (
     NandaDelegationProfile,
-    public_key_b64,
     scope_covers,
     scope_subset,
     sign_credential,
+    signer_pubkey_pem,
 )
 
 NOW = 1_800_000_000  # fixed evaluation instant (unix seconds)
@@ -54,8 +54,8 @@ def _cred(
     }
 
 
-def _sign(cred: dict, key: Ed25519PrivateKey) -> dict:
-    return {"sig_b64": sign_credential(cred, key), "signer_pubkey": public_key_b64(key)}
+def _sign(cred: dict, key: ec.EllipticCurvePrivateKey) -> dict:
+    return {"sig_b64": sign_credential(cred, key), "signer_pubkey": signer_pubkey_pem(key)}
 
 
 def _token(status: str = "ACTIVE", exp: int = NOW + 3600) -> dict:
@@ -93,7 +93,7 @@ def test_scope_subset():
 
 @pytest.mark.asyncio
 async def test_honest_single_hop_verified():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send", "mail.read"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -114,8 +114,8 @@ async def test_honest_single_hop_verified():
 
 @pytest.mark.asyncio
 async def test_honest_two_hop_verified():
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send", "mail.read"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -144,7 +144,7 @@ async def test_honest_two_hop_verified():
 
 @pytest.mark.asyncio
 async def test_scope_escalation_beyond_provider_failed():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["admin.write"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -166,8 +166,8 @@ async def test_scope_escalation_beyond_provider_failed():
 @pytest.mark.asyncio
 async def test_sibling_scope_escalation_child_failed():
     # Child asks for "a.bc" while parent only holds "a.b" — the label-boundary attack.
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["a.b"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -198,8 +198,8 @@ async def test_sibling_scope_escalation_child_failed():
 @pytest.mark.asyncio
 async def test_depth_exceeded_failed():
     # Root permits max_depth=0 (no redelegation) yet a child is chained below it.
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=0, parent=None,
@@ -228,7 +228,7 @@ async def test_depth_exceeded_failed():
 
 @pytest.mark.asyncio
 async def test_expired_window_failed():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 1000, expires=NOW - 500, max_depth=2, parent=None,  # already expired
@@ -249,8 +249,8 @@ async def test_expired_window_failed():
 @pytest.mark.asyncio
 async def test_window_not_nested_failed():
     # Child's window extends BEYOND the parent's — not nested.
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 200, max_depth=1, parent=None,
@@ -279,8 +279,8 @@ async def test_window_not_nested_failed():
 
 @pytest.mark.asyncio
 async def test_revoked_ancestor_breaks_chain_failed():
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -311,7 +311,7 @@ async def test_revoked_ancestor_breaks_chain_failed():
 
 @pytest.mark.asyncio
 async def test_stale_status_token_failed():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -331,7 +331,7 @@ async def test_stale_status_token_failed():
 
 @pytest.mark.asyncio
 async def test_missing_status_token_failed():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -356,7 +356,7 @@ async def test_missing_status_token_failed():
 
 @pytest.mark.asyncio
 async def test_forged_signature_failed():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -379,14 +379,14 @@ async def test_forged_signature_failed():
 
 @pytest.mark.asyncio
 async def test_signature_by_wrong_key_failed():
-    signer = Ed25519PrivateKey.generate()
-    attacker = Ed25519PrivateKey.generate()
+    signer = ec.generate_private_key(ec.SECP256R1())
+    attacker = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
     )
     # Signature made by `signer`, but the advertised pubkey is the attacker's.
-    entry = {"sig_b64": sign_credential(root, signer), "signer_pubkey": public_key_b64(attacker)}
+    entry = {"sig_b64": sign_credential(root, signer), "signer_pubkey": signer_pubkey_pem(attacker)}
     res = await _verify(
         {
             "chain": [root],
@@ -440,7 +440,7 @@ async def test_unsigned_hop_not_verified():
 
 @pytest.mark.asyncio
 async def test_missing_provider_scopes_not_verified():
-    key = Ed25519PrivateKey.generate()
+    key = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
@@ -465,8 +465,8 @@ async def test_missing_provider_scopes_not_verified():
 
 @pytest.mark.asyncio
 async def test_broken_linkage_failed():
-    k_root = Ed25519PrivateKey.generate()
-    k_child = Ed25519PrivateKey.generate()
+    k_root = ec.generate_private_key(ec.SECP256R1())
+    k_child = ec.generate_private_key(ec.SECP256R1())
     root = _cred(
         "d-root", "did:key:zAlice", ["mail.send"],
         issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,

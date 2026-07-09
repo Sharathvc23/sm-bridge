@@ -6,29 +6,15 @@ a chain of subjects. A chain is trustworthy only when every hop is cryptographic
 signed **and** the pure delegation-safety rules hold (scope containment, monotonicity,
 depth, nested validity windows, freshness, revocation).
 
-Port map: `sm_bridge.trust.delegation` ← ``internal/delegation/{credential,scopes,validate}.go``
-plus the status-token freshness gate from ``cmd/delegation-cli/verifychain.go``. See
-``docs/demo-verifiers.tmp.md`` (Mechanism 4).
+Port map: the delegation credential schema, scope rules, and validity/revocation checks,
+plus the status-token freshness gate. See ``docs/demo-verifiers.tmp.md`` (Mechanism 4).
 
-Signature primitive — a deliberate, documented deviation from the demo
---------------------------------------------------------------------
-The demo signs delegation credentials with **ES256** (ECDSA P-256, detached JWS, IEEE
-P1363 ``r||s``) and derives the subject ``did:key`` with multicodec ``0x1200`` (``zDnae…``).
-This port uses **Ed25519 (EdDSA)** instead, for three reasons that keep the adapter
-self-contained without weakening the honesty guarantee:
-
-  1. Ed25519 signatures are fixed 64-byte blobs — no ``r||s`` ↔ DER conversion, so there
-     is no place for an encoding bug to hide a forged-but-accepted signature.
-  2. `cryptography`'s ``Ed25519PrivateKey``/``Ed25519PublicKey`` need no curve/hash
-     plumbing, so the tests can mint real keys and real signatures with zero ceremony.
-  3. The signature check here is *real crypto over the JCS bytes*: tampering any credential
-     field changes its RFC 8785 canonicalization, changes the JWS signing input, and the
-     Ed25519 verification fails. That is exactly the property the ES256 path guarantees.
-
-The wire shape is a **compact JWS**: signing input ``b64url(JCS(header)) . b64url(JCS(cred))``,
-signature = Ed25519 over that input. If/when this profile is pointed at the live demo,
-swap :func:`_verify_signature` / :func:`sign_credential` for the P-256 detached-JWS pair
-and the credential schema, scope rules, and :class:`ValidateChain` port below are unchanged.
+Signature primitive — **ES256 (ECDSA P-256) detached JWS**, matching the demo wire: the
+signing input is ``b64url(JCS(header)) . b64url(JCS(credential))`` and the signature is a
+64-byte IEEE P1363 ``r||s`` blob (base64url). Tampering any credential field changes its
+RFC 8785 canonicalization, changes the signing input, and the verification fails. Subjects
+and signers are P-256 keys — accepted as PEM, DER, JWK, or a ``did:key`` P-256 identifier
+(multicodec ``0x1200``, ``zDnae…``).
 
 Requires the ``[trust]`` extra (``cryptography``). Core never imports this module.
 """
@@ -41,19 +27,14 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
-
+from sm_bridge.trust._es256_jws import sign_es256, verify_es256
 from sm_bridge.trust.base import ProofResult
 
 SCHEMA_VERSION = "DELEGATION-V1"
 
-# Fixed protected header for the compact JWS. Signer and verifier both canonicalize this
+# Fixed protected header for the detached JWS. Signer and verifier both canonicalize this
 # with JCS, so the signing input is symmetric and reproducible from the credential alone.
-_JWS_HEADER: dict[str, str] = {"alg": "EdDSA", "typ": "delegation+jws"}
+_JWS_HEADER: dict[str, str] = {"alg": "ES256", "typ": "delegation+jws"}
 
 
 # --------------------------------------------------------------------------------------
@@ -124,45 +105,36 @@ def scope_subset(child_scopes: list[str], parent_scopes: list[str]) -> tuple[boo
 
 
 # --------------------------------------------------------------------------------------
-# Signing helpers — real Ed25519 over the JCS bytes (used by producers and tests)
+# Signing helpers — real ES256 (ECDSA P-256) detached JWS over the JCS bytes
 # --------------------------------------------------------------------------------------
 
-
-def _signing_input(credential: dict[str, Any]) -> bytes:
-    header_b64 = _b64url(jcs_canonical(_JWS_HEADER))
-    payload_b64 = _b64url(jcs_canonical(credential))
-    return f"{header_b64}.{payload_b64}".encode("ascii")
+_HEADER_B64 = _b64url(jcs_canonical(_JWS_HEADER))
 
 
-def public_key_b64(private_key: Ed25519PrivateKey) -> str:
-    """Base64 of the raw 32-byte Ed25519 public key — the ``signer_pubkey`` wire value."""
-    from cryptography.hazmat.primitives import serialization
+def signer_pubkey_pem(private_key: Any) -> str:
+    """PEM of the P-256 public key — a ``signer_pubkey`` wire value (producers/tests)."""
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-    raw = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
+    pem: str = (
+        private_key.public_key()
+        .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        .decode("ascii")
     )
-    return base64.b64encode(raw).decode("ascii")
+    return pem
 
 
-def sign_credential(credential: dict[str, Any], private_key: Ed25519PrivateKey) -> str:
-    """Sign ``credential`` (JCS-canonicalized, compact JWS input) → base64 signature."""
-    sig = private_key.sign(_signing_input(credential))
-    return base64.b64encode(sig).decode("ascii")
+def sign_credential(credential: dict[str, Any], private_key: Any) -> str:
+    """Sign ``credential`` with ES256 over the detached JWS input → base64url signature."""
+    return sign_es256(_HEADER_B64, jcs_canonical(credential), private_key)
 
 
-def _verify_signature(credential: dict[str, Any], sig_b64: str, signer_pubkey_b64: str) -> bool:
-    """Real Ed25519 verification of ``sig_b64`` over ``JCS(credential)``.
+def _verify_signature(credential: dict[str, Any], sig_b64url: str, signer_pubkey: Any) -> bool:
+    """Real ES256 (P-256) verification of ``sig_b64url`` over ``JCS(credential)``.
 
-    Returns False on any signature failure or malformed key/signature bytes — an
-    ``InvalidSignature`` here is the *result of the check*, not a swallowed error.
+    ``signer_pubkey`` may be PEM/DER bytes, a PEM str, a JWK dict, or a ``did:key`` P-256.
+    Returns False on any signature/key failure — the rejection *is* the result of the check.
     """
-    try:
-        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(signer_pubkey_b64))
-        pub.verify(base64.b64decode(sig_b64), _signing_input(credential))
-        return True
-    except (InvalidSignature, ValueError):
-        return False
+    return verify_es256(_HEADER_B64, jcs_canonical(credential), sig_b64url, signer_pubkey)
 
 
 # --------------------------------------------------------------------------------------
@@ -414,5 +386,5 @@ __all__ = [
     "scope_covers",
     "scope_subset",
     "sign_credential",
-    "public_key_b64",
+    "signer_pubkey_pem",
 ]

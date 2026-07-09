@@ -9,17 +9,17 @@ from sm_bridge.trust import ProofResult, ProofStatus, TrustRegistry
 
 
 def _facts(**over):
-    base = dict(
-        id="agent-1",
-        agent_name="Agent One",
-        label="test",
-        description="d",
-        version="1.0.0",
-        provider={"name": "P", "url": "https://p.example"},
-        endpoints={"static": ["https://a.example/mcp"]},
-        capabilities={"modalities": ["text"]},
-        skills=[{"id": "s1", "name": "Skill", "description": "a skill"}],
-    )
+    base = {
+        "id": "agent-1",
+        "agent_name": "Agent One",
+        "label": "test",
+        "description": "d",
+        "version": "1.0.0",
+        "provider": {"name": "P", "url": "https://p.example"},
+        "endpoints": {"static": ["https://a.example/mcp"]},
+        "capabilities": {"modalities": ["text"]},
+        "skills": [{"id": "s1", "name": "Skill", "description": "a skill"}],
+    }
     base.update(over)
     return SmAgentFacts.model_validate(base)
 

@@ -65,6 +65,7 @@ from .onboarding import (
 )
 from .router import SmBridge, create_sm_router
 from .store import DeltaStore, PersistentDeltaStore
+from .switchboard import Switchboard, SwitchboardResult
 from .trust import ProofResult, ProofStatus, TrustProfile, TrustRegistry
 
 # Trust-profile ADAPTERS live in sm_bridge.trust.<name> and require the [trust] extra —
@@ -129,4 +130,7 @@ __all__ = [
     "AdmissionError",
     "DelegationResolution",
     "normalize_reliability_receipts",
+    # Switchboard (v0.4) — cross-registry resolve, uniform response
+    "Switchboard",
+    "SwitchboardResult",
 ]

@@ -11,12 +11,18 @@ normalized, verifiable proof block, while the Index stays strictly pointer-only.
 - **Trust-profile spine** (`sm_bridge.trust`): `ProofResult` (VERIFIED / FAILED /
   NOT_VERIFIED, with the cryptographic-honesty invariant enforced at construction — no
   VERIFIED without a real `evidence_ref`), the `TrustProfile` protocol, and `TrustRegistry`.
-- **Five trust-profile adapters** (`[trust]` extra, lazy crypto imports):
+- **Six trust-profile adapters** (`[trust]` extra, lazy crypto imports):
   - `ed25519-agentcard` — the NANDA Index agent-card signing contract (JCS + ed25519).
   - `ans-scitt` — the ANS SCITT receipt contract (COSE_Sign1 + RFC 9162 Merkle + issuer binding).
   - `ans-txt` — the ANS `ANS_TXT` DNS discovery profile (split-horizon aware).
   - `dns-aid` — **consumes the upstream `dns-aid` package** (SVCB + DNSSEC + DANE).
-  - `nanda-delegation` — did:key delegation chains (scope containment, freshness, revocation).
+  - `jws-catalog` — signed AI-Catalog verification (ES256 detached JWS over the JCS entries;
+    catalog-hijack detection).
+  - `nanda-delegation` — did:key delegation chains over **ES256 / P-256** detached JWS
+    (scope containment, freshness, revocation).
+- **Cross-registry switchboard** (`sm_bridge.switchboard`): one resolve surfaces agents from
+  heterogeneous registries through a uniform result — entry-mode registries delegate,
+  hosting-mode registries resolve locally with a verified proof. One entry per registry.
 - **Dual onboarding modes** (`sm_bridge.onboarding`): `RegistryEntry`, the `EntryModeConverter`
   protocol (no agent-iteration — quilt invariant enforced structurally), `ANSEntryConverter`,
   and `/nanda/registries` + entry-mode delegation-resolve router surface. `reliability_receipts`
