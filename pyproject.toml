@@ -76,6 +76,9 @@ dev = [
     "hypothesis>=6.100.0",
 ]
 
+[project.scripts]
+sm-bridge = "sm_bridge.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Sharathvc23/sm-bridge"
 Documentation = "https://github.com/Sharathvc23/sm-bridge#readme"

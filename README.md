@@ -47,6 +47,20 @@ Every `VERIFIED` is a real signature / DNS / Merkle check; absent live infra you
 `NOT_VERIFIED(reason)`, never a mocked pass. See [`docs/trust-profiles.md`](docs/trust-profiles.md)
 and [`docs/quilt-onboarding.md`](docs/quilt-onboarding.md).
 
+### Command line
+
+The same verification is available from the terminal (`[trust]` extra):
+
+```bash
+sm-bridge verify ans-scitt   --receipt receipt.cbor --root-keys root-keys.txt
+sm-bridge verify jws-catalog --catalog ai-catalog.json --signature sig.jws --jwks jwks.json
+sm-bridge verify agent-card  --card card.json --signature-b64 <b64> --pubkey key.pem
+sm-bridge verify dns-aid     --fqdn agent.example.com [--dane]
+sm-bridge verify delegation  --evidence delegation-bundle.json
+```
+
+Exit code `0` = VERIFIED, `1` = FAILED, `2` = NOT_VERIFIED.
+
 ## Installation
 
 ```bash
