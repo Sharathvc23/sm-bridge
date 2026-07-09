@@ -25,7 +25,7 @@ from sm_bridge.trust.ed25519_agentcard import canonicalize
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ============================ Merkle proof — properties =================================

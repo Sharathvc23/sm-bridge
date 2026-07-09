@@ -144,9 +144,7 @@ def _run_ans_verify(port: int) -> subprocess.CompletedProcess:
 
 def _py_verify(receipt: bytes, pub) -> ProofStatus:
     pem = pub.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-    out = asyncio.get_event_loop().run_until_complete(
-        AnsScittProfile().verify(None, {"receipt": receipt, "public_key": pem})
-    )
+    out = asyncio.run(AnsScittProfile().verify(None, {"receipt": receipt, "public_key": pem}))
     return out.status
 
 
