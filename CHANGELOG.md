@@ -1,0 +1,50 @@
+# Changelog
+
+## [0.4.0] — universal registry onboarding + verification
+
+The v0.4 line turns sm-bridge from a NANDA publication layer into the **universal on-ramp for
+the NANDA Index quilt**: any source onboards through one library and emerges with a
+normalized, verifiable proof block, while the Index stays strictly pointer-only.
+
+### Added
+
+- **Trust-profile spine** (`sm_bridge.trust`): `ProofResult` (VERIFIED / FAILED /
+  NOT_VERIFIED, with the cryptographic-honesty invariant enforced at construction — no
+  VERIFIED without a real `evidence_ref`), the `TrustProfile` protocol, and `TrustRegistry`.
+- **Five trust-profile adapters** (`[trust]` extra, lazy crypto imports):
+  - `ed25519-agentcard` — the NANDA Index agent-card signing contract (JCS + ed25519).
+  - `ans-scitt` — the ANS SCITT receipt contract (COSE_Sign1 + RFC 9162 Merkle + issuer binding).
+  - `ans-txt` — the ANS `ANS_TXT` DNS discovery profile (split-horizon aware).
+  - `dns-aid` — **consumes the upstream `dns-aid` package** (SVCB + DNSSEC + DANE).
+  - `nanda-delegation` — did:key delegation chains (scope containment, freshness, revocation).
+- **Dual onboarding modes** (`sm_bridge.onboarding`): `RegistryEntry`, the `EntryModeConverter`
+  protocol (no agent-iteration — quilt invariant enforced structurally), `ANSEntryConverter`,
+  and `/nanda/registries` + entry-mode delegation-resolve router surface. `reliability_receipts`
+  pass-through (attester identity mandatory, no grading).
+- **Transparency-log extra** (`[tlog]`): RFC 6962 Merkle over the delta log, signed checkpoint,
+  inclusion + consistency proofs (refused below treeSize 3), and `sm_bridge.conformance` — the
+  Demo 3 auditor self-test (checkpoint signature, root recomputation, append-only, tamper
+  detection). Computed `conformanceLevel`.
+- ai-catalog spec alignment: `/.well-known/ai-catalog.json` now emits `{specVersion, host,
+  entries}` per the Agent-Card/ai-catalog standard.
+
+### Changed
+
+- `SmAgentFacts.proof` is now a typed `ProofResult | None`. A pre-v0.4 opaque `proof` dict is
+  accepted for back-compat but **downgraded to `NOT_VERIFIED(legacy-unverified)`** — it can no
+  longer masquerade as verified. `SimpleAgentConverter` emits `ProofResult.legacy()` (it holds
+  no cryptographic evidence) rather than a fabricated sha256 placeholder.
+- `/nanda/resolve` is now `async` and carries a normalized proof block when a `TrustRegistry`
+  is injected and the converter supplies `trust_evidence`.
+
+### Compatibility
+
+- The FastAPI + pydantic core never imports a crypto library (verified in CI); all verifiers
+  live in `[trust]` / `[tlog]` and import lazily.
+- All v0.3.x endpoints and shapes are preserved. The 51 pre-v0.4 tests pass unchanged except
+  one that asserted the old opaque-proof shape (updated to the honest downgrade).
+
+## [0.3.1]
+
+NANDA AgentFacts converter, registry endpoints (`/nanda/*`), AI-Catalog + A2A gateway,
+Quilt-style deltas, federation sync.

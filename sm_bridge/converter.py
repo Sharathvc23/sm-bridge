@@ -26,6 +26,7 @@ from .models import (
     SmSkill,
     SmTelemetry,
 )
+from .trust.base import ProofResult
 
 
 @dataclass
@@ -373,17 +374,11 @@ class SimpleAgentConverter:
         domain = self.provider_url.replace("https://", "").replace("http://", "")
         return f"did:{self.did_method}:{domain}:agents:{agent.namespace}:{agent.id}"
 
-    def _build_proof(self, agent: SimpleAgent) -> dict[str, Any]:
-        """Create a lightweight, non-secret proof placeholder."""
-        import hashlib
-
-        payload = f"{agent.id}:{agent.namespace}:{agent.version}:{self.registry_id}"
-        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return {
-            "method": "sha256",
-            "digest": digest,
-            "registry_id": self.registry_id,
-        }
+    def _build_proof(self, agent: SimpleAgent) -> ProofResult:
+        """The simple in-memory converter holds no cryptographic evidence for an agent, so it
+        emits an explicit unverified proof rather than a fabricated one. A real source wires a
+        TrustProfile (ed25519-agentcard, ans-scitt, …) via the resolve-time evidence hook."""
+        return ProofResult.legacy()
 
 
 class AbstractAgentConverter(ABC):  # pragma: no cover - interface helpers only

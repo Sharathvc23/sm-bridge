@@ -122,7 +122,8 @@ class TestParseIdentifierBoundary:
 class TestRouterFailures:
     """Router error-path tests."""
 
-    def test_resolve_not_found_and_not_public(self):
+    async def test_resolve_not_found_and_not_public(self):
+        # sm_resolve is async as of v0.4 — await the handler inside pytest.raises.
         router, _, converter, _ = _build_router()
         private_agent = SimpleAgent(
             id="private", name="Private", description="priv", public=False, namespace="ns"
@@ -132,12 +133,12 @@ class TestRouterFailures:
         resolve_route = next(r for r in router.routes if r.path.endswith("/resolve"))
 
         with pytest.raises(HTTPException) as missing:
-            resolve_route.endpoint(agent="missing")
+            await resolve_route.endpoint(agent="missing")
         assert missing.value.status_code == 404
 
         handle = f"@{TEST_REGISTRY_ID}:ns/private"
         with pytest.raises(HTTPException) as forbidden:
-            resolve_route.endpoint(agent=handle)
+            await resolve_route.endpoint(agent=handle)
         assert forbidden.value.status_code == 403
 
 
@@ -338,7 +339,12 @@ def test_converter_ext_metadata_dynamic_and_proof():
     assert meta["telemetry"]["latency_ms"] == 50
     assert any(entry["key"] == "primary" for entry in meta["endpoints_extended"])
     assert any(entry["key"] == "dynamic_0" for entry in meta["endpoints_extended"])
-    assert facts.proof["method"] == "sha256"
+    # v0.4: the converter's non-cryptographic sha256 placeholder is no longer accepted as a
+    # trusted proof — the typed-proof migration downgrades any opaque legacy dict to an
+    # honest NOT_VERIFIED rather than letting a public-input hash masquerade as verification.
+    assert facts.proof is not None
+    assert facts.proof.status.value == "NOT_VERIFIED"
+    assert "legacy-unverified" in (facts.proof.failure_reason or "")
 
 
 def test_delta_store_pruning_get_and_clear():
@@ -375,13 +381,14 @@ def test_index_filters_private_and_lists_public():
     assert data["agents"][0]["id"].endswith("public")
 
 
-def test_resolve_success_returns_agentfacts():
+async def test_resolve_success_returns_agentfacts():
+    # sm_resolve is async as of v0.4 (it may await a TrustProfile) — await the handler.
     router, _, converter, _ = _build_router()
     agent = SimpleAgent(id="good", name="Good Agent", description="ok", labels=["chat"])
     converter.register(agent)
 
     resolve_route = next(r for r in router.routes if r.path.endswith("/resolve"))
-    facts = resolve_route.endpoint(agent="good")
+    facts = await resolve_route.endpoint(agent="good")
 
     assert facts.agent_name == "Good Agent"
     assert facts.handle.endswith("/good")

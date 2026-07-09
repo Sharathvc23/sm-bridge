@@ -58,6 +58,7 @@ class CatalogDocument(BaseModel):
     """The aggregate AI-Catalog served at ``/.well-known/ai-catalog.json``."""
 
     specVersion: str = "1.0"
+    host: str | None = None  # ai-catalog spec (Agent-Card/ai-catalog): the catalog's host
     entries: list[CatalogEntry]
 
 
@@ -166,7 +167,8 @@ def create_gateway_router(
     def ai_catalog() -> CatalogDocument:
         agents = current_facts(delta_store, slug_fn)
         return CatalogDocument(
-            entries=[to_catalog_entry(f, slug, base) for slug, f in agents.items()]
+            host=base,
+            entries=[to_catalog_entry(f, slug, base) for slug, f in agents.items()],
         )
 
     @router.get("/agents/{slug}", response_model=CatalogEntry)

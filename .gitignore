@@ -85,3 +85,6 @@ dmypy.json
 
 # Benchmarks
 .benchmarks/
+
+# Local-only working scratch — never commit
+*.tmp.md

@@ -55,10 +55,22 @@ from .models import (
     SmToolsResponse,
     SmWellKnown,
 )
+from .onboarding import (
+    ANSEntryConverter,
+    DelegationResolution,
+    EntryModeConverter,
+    RegistryEntry,
+    normalize_reliability_receipts,
+)
 from .router import SmBridge, create_sm_router
 from .store import DeltaStore, PersistentDeltaStore
+from .trust import ProofResult, ProofStatus, TrustProfile, TrustRegistry
 
-__version__ = "0.3.1"
+# Trust-profile ADAPTERS live in sm_bridge.trust.<name> and require the [trust] extra —
+# import them from their submodules (e.g. from sm_bridge.trust.ans_scitt import AnsScittProfile)
+# so a core-only install never imports cryptography/cbor2/dnspython.
+
+__version__ = "0.4.0"
 __all__ = [
     # Core Models
     "SmAgentFacts",
@@ -104,4 +116,15 @@ __all__ = [
     "pull_deltas",
     "PullResult",
     "FederationPoller",
+    # Trust spine (v0.4) — normalized proof block + verifier plugin seam
+    "ProofResult",
+    "ProofStatus",
+    "TrustProfile",
+    "TrustRegistry",
+    # Onboarding (v0.4) — entry mode (quilt-safe) vs hosting mode
+    "RegistryEntry",
+    "EntryModeConverter",
+    "ANSEntryConverter",
+    "DelegationResolution",
+    "normalize_reliability_receipts",
 ]

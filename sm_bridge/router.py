@@ -28,7 +28,9 @@ from .models import (
     SmToolsResponse,
     SmWellKnown,
 )
+from .onboarding import DelegationResolution, EntryModeConverter, RegistryEntry
 from .store import DeltaStore
+from .trust.base import TrustRegistry
 
 
 def create_sm_router(
@@ -41,6 +43,8 @@ def create_sm_router(
     tools: list[SmTool] | None = None,
     namespaces: list[str] | None = None,
     prefix: str = "/nanda",
+    trust_registry: TrustRegistry | None = None,
+    entries: list[EntryModeConverter] | None = None,
 ) -> tuple[APIRouter, APIRouter]:
     """Create FastAPI routers with NANDA endpoints.
 
@@ -117,7 +121,7 @@ def create_sm_router(
         )
 
     @router.get("/resolve", response_model=SmAgentFacts)
-    def sm_resolve(
+    async def sm_resolve(
         agent: str = Query(..., description="Agent ID, DID, or handle"),
     ) -> SmAgentFacts:
         """Resolve a single agent by ID.
@@ -126,6 +130,12 @@ def create_sm_router(
         - Agent ID (e.g., "my-agent")
         - DID (e.g., "did:web:example.com:agents:my-agent")
         - Handle (e.g., "@myregistry/my-agent")
+
+        When a `TrustRegistry` is injected and the converter can supply verification
+        evidence for the agent (`trust_evidence(agent) -> (profile_id, evidence)`), the
+        resolved facts carry a normalized `ProofResult`. Absent a registry or evidence, the
+        proof block reflects whatever the converter produced (honest NOT_VERIFIED for an
+        unverified source) — never a fabricated pass.
         """
         # Parse the agent identifier
         agent_id = _parse_agent_identifier(agent, registry_id)
@@ -139,7 +149,18 @@ def create_sm_router(
         if not converter.is_public(internal_agent):
             raise HTTPException(status_code=403, detail="Agent is not public")
 
-        return converter.to_sm(internal_agent)
+        facts = converter.to_sm(internal_agent)
+
+        # Attach a normalized proof block when a trust profile can verify this agent.
+        if trust_registry is not None:
+            evidence_hook = getattr(converter, "trust_evidence", None)
+            if callable(evidence_hook):
+                supplied = evidence_hook(internal_agent)
+                if supplied is not None:
+                    profile_id, evidence = supplied
+                    facts.proof = await trust_registry.verify(profile_id, facts, evidence)
+
+        return facts
 
     @router.get("/deltas", response_model=SmAgentFactsDeltaResponse)
     def sm_deltas(
@@ -169,6 +190,37 @@ def create_sm_router(
             registry_id=registry_id,
             tools=tools,
         )
+
+    # ----- entry-mode: the quilt of registries ------------------------------------
+    # Registry-scale sources onboard as ONE RegistryEntry each; resolution is delegated
+    # back to their own resolver, never mirrored here.
+    _entry_by_name: dict[str, EntryModeConverter] = {}
+    for _conv in entries or []:
+        _entry_by_name[_conv.to_entry().registry_name] = _conv
+
+    @router.get("/registries", response_model=list[RegistryEntry])
+    def sm_registries() -> list[RegistryEntry]:
+        """List the registry-scale sources stitched into this quilt (pointer entries)."""
+        return [c.to_entry() for c in _entry_by_name.values()]
+
+    @router.get("/registries/{name}", response_model=RegistryEntry)
+    def sm_registry(name: str) -> RegistryEntry:
+        """One registry entry (+ its proof, if any)."""
+        conv = _entry_by_name.get(name)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Registry not found")
+        return conv.to_entry()
+
+    @router.get("/registries/{name}/resolve", response_model=DelegationResolution)
+    def sm_registry_resolve(
+        name: str, agent: str = Query(..., description="Agent identifier to resolve at the source")
+    ) -> DelegationResolution:
+        """Resolve an agent under an entry-mode registry: returns a delegation pointer to the
+        source's resolver — this bridge never mirrors an entry-mode record."""
+        conv = _entry_by_name.get(name)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Registry not found")
+        return conv.delegate(agent)
 
     # Well-known endpoint — mounted on a separate unprefixed router
     # so it serves at /.well-known/nanda.json per RFC 8615.
@@ -265,6 +317,8 @@ class SmBridge:
         delta_store: DeltaStore | None = None,
         tools: list[SmTool] | None = None,
         namespaces: list[str] | None = None,
+        trust_registry: TrustRegistry | None = None,
+        entries: list[EntryModeConverter] | None = None,
     ):
         """Initialize the NANDA bridge.
 
@@ -300,6 +354,12 @@ class SmBridge:
         # Store tools
         self.tools = tools or []
 
+        # Trust registry (optional) — profile_id -> TrustProfile for normalized proofs.
+        self.trust_registry = trust_registry
+
+        # Entry-mode registries (optional) — one RegistryEntry per registry-scale source.
+        self.entries = entries or []
+
         # Create routers — main NANDA router + separate well-known router
         self.router, self.wellknown_router = create_sm_router(
             converter=self.converter,
@@ -310,6 +370,8 @@ class SmBridge:
             provider_url=provider_url,
             tools=self.tools,
             namespaces=namespaces,
+            trust_registry=self.trust_registry,
+            entries=self.entries,
         )
 
     def register_agent(self, agent: Any) -> SmAgentFacts:
