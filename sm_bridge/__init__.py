@@ -72,7 +72,7 @@ from .trust import ProofResult, ProofStatus, TrustProfile, TrustRegistry
 # import them from their submodules (e.g. from sm_bridge.trust.ans_scitt import AnsScittProfile)
 # so a core-only install never imports cryptography/cbor2/dnspython.
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = [
     # Core Models
     "SmAgentFacts",

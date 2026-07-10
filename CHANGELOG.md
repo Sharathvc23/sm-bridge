@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.1] — docs
+
+- README rewritten to lead with what the bridge is and does (commercial + OSS tone); removed a
+  dead `agentfacts-format` link and trimmed the reference sections into the docs. No code changes.
+
 ## [0.4.0] — universal registry onboarding + verification
 
 The v0.4 line turns sm-bridge from a NANDA publication layer into the **universal on-ramp for
