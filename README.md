@@ -1,35 +1,56 @@
-# SM Bridge
+# sm-bridge
 
 [![PyPI](https://img.shields.io/pypi/v/sm-bridge.svg)](https://pypi.org/project/sm-bridge/)
 [![Python](https://img.shields.io/pypi/pyversions/sm-bridge.svg)](https://pypi.org/project/sm-bridge/)
 [![License](https://img.shields.io/pypi/l/sm-bridge.svg)](./LICENSE)
 
-A Python library for building NANDA-compatible AI agent registries.
+**The universal on-ramp to the NANDA agent-internet.**
 
-**[NANDA](https://projectnanda.org)** (Network of AI Agents in Decentralized Architecture) is the protocol for federated AI agent discovery and communication. This library provides the primitives needed to make your agent registry interoperable with the NANDA ecosystem.
+sm-bridge lets any agent source — your own registry, an AI catalog, an ANS registry, or a
+single domainless agent — join the [NANDA](https://projectnanda.org) Index through one small
+library, and emerge carrying a **normalized, cryptographically verifiable proof of trust**.
+The Index stays a *quilt of registries* (one entry per registry, never one per agent); the
+bridge is how you get onto it.
 
-## Features
+The core is just FastAPI + Pydantic. Verification and transparency-log features live in
+optional extras, so you only pull cryptography when you use it.
 
-- **NANDA AgentFacts Models** - Pydantic models implementing the [projnanda/agentfacts-format](https://github.com/projnanda) specification
-- **FastAPI Router** - Drop-in endpoints for `/nanda/index`, `/nanda/resolve`, `/nanda/deltas`
-- **Delta Store** - Change tracking for registry synchronization
-- **Converter Interface** - Abstract pattern for integrating with your existing registry
-- **Trust profiles (v0.4)** - Verify heterogeneous sources (ed25519 agent-card, ANS/SCITT, DNS-AID, delegation) and normalize to one proof block ([`docs/trust-profiles.md`](docs/trust-profiles.md))
-- **Quilt onboarding (v0.4)** - Entry mode (pointer-only, quilt-safe) vs hosting mode ([`docs/quilt-onboarding.md`](docs/quilt-onboarding.md))
-- **Transparency log (v0.4)** - RFC 6962 Merkle + signed checkpoint; pass your own conformance auditor
+## What it does
 
-## Universal onboarding + verification (v0.4) — 5-minute path
+- **Onboard** any source to the quilt. A registry-scale source (like ANS, with its own
+  resolver) joins as **one entry** and resolution is delegated back to it — the bridge never
+  mirrors its agents. A source with **no registry of its own** (a catalog, a `did:key` agent)
+  is hosted locally.
+- **Verify** each source with a pluggable **trust profile** and normalize the result to one
+  proof block: `VERIFIED` / `FAILED` / `NOT_VERIFIED`. Every `VERIFIED` is a real signature,
+  DNS, or Merkle check — absent live infrastructure you get an honest `NOT_VERIFIED(reason)`,
+  never a mocked pass.
+- **Serve** the NANDA discovery surfaces as drop-in FastAPI routers: `/nanda/index`,
+  `/nanda/resolve`, `/nanda/deltas`, `/.well-known/nanda.json`, plus an AI-Catalog gateway.
+
+Trust profiles today: `ed25519-agentcard`, `ans-scitt` (ANS SCITT receipts),
+`ans-txt` (ANS DNS discovery), `dns-aid` (SVCB + DNSSEC + DANE), `jws-catalog` (signed
+AI-Catalog), and `nanda-delegation` (did:key delegation chains). See
+[`docs/trust-profiles.md`](docs/trust-profiles.md).
+
+## Install
 
 ```bash
-pip install "sm-bridge[trust]"     # verification adapters (crypto in extras; core stays fastapi+pydantic)
+pip install sm-bridge                 # core: FastAPI routers, models, delta sync
+pip install "sm-bridge[trust]"        # + verification adapters (ed25519/SCITT/DNS-AID/JWS/delegation)
+pip install "sm-bridge[trust,tlog]"   # + RFC 6962 transparency log & conformance self-test
 ```
+
+Requires Python 3.11+.
+
+## Onboard and verify
 
 ```python
 from sm_bridge import SmBridge, SimpleAgent, SimpleAgentConverter, ANSEntryConverter, TrustRegistry
 from sm_bridge.trust.ed25519_agentcard import Ed25519AgentCardProfile
 from sm_bridge.trust.ans_scitt import AnsScittProfile
 
-# Hosting mode (a source with no registry of its own) + entry mode (a registry-scale source)
+# A source with no registry of its own → hosted locally.
 conv = SimpleAgentConverter(registry_id="quilt", provider_name="Q", provider_url="https://q.example")
 conv.register(SimpleAgent(id="finance", name="Finance Agent", description="does finance"))
 
@@ -37,15 +58,13 @@ bridge = SmBridge(
     registry_id="quilt", provider_name="Q", provider_url="https://q.example",
     converter=conv,
     trust_registry=TrustRegistry([Ed25519AgentCardProfile(), AnsScittProfile()]),
+    # A registry-scale source (ANS) → one entry, resolution delegated back to it.
     entries=[ANSEntryConverter(registry_name="acme-ans", resolver_endpoint="https://ans.acme.example")],
 )
-# /nanda/resolve → SmAgentFacts + a normalized proof block
-# /nanda/registries/acme-ans/resolve → a delegation pointer (the quilt never mirrors ANS's agents)
-```
 
-Every `VERIFIED` is a real signature / DNS / Merkle check; absent live infra you get an honest
-`NOT_VERIFIED(reason)`, never a mocked pass. See [`docs/trust-profiles.md`](docs/trust-profiles.md)
-and [`docs/quilt-onboarding.md`](docs/quilt-onboarding.md).
+# GET /nanda/resolve?agent=finance          → agent facts + a normalized proof block
+# GET /nanda/registries/acme-ans/resolve    → a delegation pointer (the quilt never mirrors ANS's agents)
+```
 
 ### Command line
 
@@ -70,43 +89,21 @@ python examples/demo1_switchboard.py            # one query → an ANS registry 
 python examples/demo2_domainless_delegation.py  # a domainless did:key earns scoped, revocable delegation
 ```
 
-## Installation
+## Serve a NANDA-compatible registry
 
-```bash
-pip install sm-bridge
-```
-
-The delta sync client's default HTTP transport is an optional extra:
-
-```bash
-pip install "sm-bridge[federation]"
-```
-
-Or install from source:
-
-```bash
-git clone https://github.com/Sharathvc23/sm-bridge
-cd sm-bridge
-pip install -e .
-```
-
-## Quick Start
-
-### Basic Usage
+If you just want to expose your own agents on NANDA, mount the routers and register agents:
 
 ```python
 from fastapi import FastAPI
 from sm_bridge import SmBridge, SimpleAgent
 
-# Create the bridge
 bridge = SmBridge(
     registry_id="my-registry",
     provider_name="My Company",
     provider_url="https://example.com",
-    base_url="https://registry.example.com"
+    base_url="https://registry.example.com",
 )
 
-# Register agents
 bridge.register_agent(SimpleAgent(
     id="my-agent",
     name="My Agent",
@@ -115,286 +112,100 @@ bridge.register_agent(SimpleAgent(
     labels=["chat", "tool-use"],
     skills=[
         {"id": "summarize", "description": "Summarizes text"},
-        {"id": "translate", "description": "Translates between languages"}
-    ]
+        {"id": "translate", "description": "Translates between languages"},
+    ],
 ))
 
-# Mount routers
 app = FastAPI()
 app.include_router(bridge.router)            # /nanda/* endpoints
-app.include_router(bridge.wellknown_router)   # /.well-known/nanda.json (RFC 8615)
+app.include_router(bridge.wellknown_router)  # /.well-known/nanda.json (RFC 8615)
 ```
 
-This gives you:
+You get:
 
-- `GET /nanda/index` - List all public agents (with correct `total_count` for pagination)
-- `GET /nanda/resolve?agent=my-agent` - Resolve a single agent
-- `GET /nanda/deltas?since=0` - Get changes for sync
-- `GET /.well-known/nanda.json` - Registry discovery (RFC 8615 compliant)
+- `GET /nanda/index` — list public agents (with a correct `total_count` for pagination)
+- `GET /nanda/resolve?agent=my-agent` — resolve a single agent
+- `GET /nanda/deltas?since=0` — change feed for synchronization
+- `GET /.well-known/nanda.json` — registry discovery document
 
-### Custom Registry Integration
+### Integrate an existing registry
 
-For existing registries with their own data models:
+Implement the converter protocol to expose your own data model, without copying agents into
+a second store:
 
 ```python
-from sm_bridge import (
-    AbstractAgentConverter,
-    SmAgentFacts,
-    SmProvider,
-    SmEndpoints,
-    SmCapabilities,
-    SmSkill,
-    DeltaStore,
-    create_sm_router,
-)
 from typing import Iterator
 
+from sm_bridge import (
+    AbstractAgentConverter, SmAgentFacts, SmEndpoints, SmCapabilities, SmSkill,
+    DeltaStore, create_sm_router,
+)
+
+
 class MyRegistryConverter(AbstractAgentConverter):
-    def __init__(self, db_connection):
-        super().__init__(
-            registry_id="my-registry",
-            provider_name="My Company",
-            provider_url="https://example.com"
-        )
-        self.db = db_connection
-    
+    def __init__(self, db):
+        super().__init__(registry_id="my-registry", provider_name="My Company",
+                         provider_url="https://example.com")
+        self.db = db
+
     def to_sm(self, agent) -> SmAgentFacts:
         return SmAgentFacts(
             id=f"did:web:example.com:agents:{agent.id}",
             handle=self.build_handle(agent.namespace, agent.id),
-            agent_name=agent.display_name,
-            label=agent.category,
-            description=agent.description,
-            version=agent.version,
+            agent_name=agent.display_name, label=agent.category,
+            description=agent.description, version=agent.version,
             provider=self.build_provider(),
             endpoints=SmEndpoints(static=[agent.endpoint_url]),
             capabilities=SmCapabilities(modalities=agent.capabilities),
             skills=[SmSkill(id=s.id, description=s.desc) for s in agent.skills],
-            metadata={
-                "x_my_registry": {
-                    "internal_id": agent.internal_id,
-                    "created_at": agent.created_at.isoformat(),
-                }
-            }
         )
-    
+
     def list_agents(self, limit: int, offset: int) -> Iterator:
         return self.db.query_agents(limit=limit, offset=offset)
-    
+
     def get_agent(self, agent_id: str):
         return self.db.get_agent(agent_id)
-    
+
     def is_public(self, agent) -> bool:
         return agent.visibility == "public"
-
-# Create router with custom converter
-converter = MyRegistryConverter(db_connection)
-delta_store = DeltaStore()
-
-nanda_router, wellknown_router = create_sm_router(
-    converter=converter,
-    delta_store=delta_store,
-    registry_id="my-registry",
-    base_url="https://registry.example.com",
-    provider_name="My Company",
-    provider_url="https://example.com"
-)
-
-app = FastAPI()
-app.include_router(nanda_router)
-app.include_router(wellknown_router)
 ```
 
-## Models
+To attach real verification at resolve time, add a `trust_evidence(agent) -> (profile_id,
+evidence)` method to your converter and inject a `TrustRegistry` — the resolved facts then
+carry a `ProofResult`.
 
-### SmAgentFacts
+## Delta sync & AI-Catalog gateway
 
-The core data structure for agent metadata:
+- **Delta store** — `DeltaStore` tracks upserts/deletes with a monotonic cursor for
+  registry-to-registry synchronization; subclass `PersistentDeltaStore` to back it with a
+  database. The default HTTP sync transport is the `[federation]` extra.
+- **AI-Catalog gateway** — `create_gateway_router(delta_store, base_url=..., domain=...)`
+  serves `/.well-known/ai-catalog.json`, `/agents/{slug}`, and A2A `/cards/{slug}.json`
+  alongside the `/nanda/*` router.
 
-```python
-from sm_bridge import SmAgentFacts
+## Transparency log & conformance
 
-facts = SmAgentFacts(
-    id="did:web:example.com:agents:my-agent",
-    handle="@my-registry:production/my-agent",
-    agent_name="My Agent",
-    label="assistant",
-    description="An AI assistant",
-    version="1.0.0",
-    provider=SmProvider(
-        name="My Company",
-        url="https://example.com"
-    ),
-    endpoints=SmEndpoints(
-        static=["https://api.example.com/agents/my-agent"]
-    ),
-    capabilities=SmCapabilities(
-        modalities=["text", "tool-use"],
-        authentication=SmAuthentication(methods=["did-auth"])
-    ),
-    skills=[
-        SmSkill(
-            id="urn:my-registry:cap:summarize:v1",
-            description="Summarizes long documents",
-            inputModes=["text"],
-            outputModes=["text"]
-        )
-    ],
-    metadata={
-        "x_my_registry": {
-            "custom_field": "custom_value"
-        }
-    }
-)
-```
+The `[tlog]` extra adds an RFC 6962 Merkle tree over the delta log, a signed checkpoint, and
+inclusion/consistency proofs, plus a conformance self-test (`sm_bridge.conformance`) that
+verifies the checkpoint signature, recomputes the root, checks append-only growth, and
+detects tampering.
 
-### Handle Format
+## Documentation
 
-NANDA handles follow the format `@registry:namespace/agent-id`:
+- [`docs/trust-profiles.md`](docs/trust-profiles.md) — the trust profiles and the proof block.
+- [`docs/quilt-onboarding.md`](docs/quilt-onboarding.md) — entry mode vs hosting mode, and
+  verify-at-admission.
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes.
 
-```python
-handle = SmAgentFacts.create_handle(
-    registry="my-registry",
-    namespace="production", 
-    agent_id="my-agent"
-)
-# Returns: "@my-registry:production/my-agent"
-```
+## Related packages
 
-## Delta Store
+Part of the `sm-*` trust stack:
 
-Track changes for registry synchronization:
-
-```python
-from sm_bridge import DeltaStore, SmAgentFacts
-
-store = DeltaStore()
-
-# Record an agent creation/update
-delta = store.add("upsert", agent_facts)
-print(f"Recorded delta with seq={delta.seq}")
-
-# Get all changes since seq 0
-deltas = store.since(0)
-
-# Get next sequence number for polling
-next_seq = store.next_seq
-```
-
-For production, extend `PersistentDeltaStore` to persist to a database:
-
-```python
-from sm_bridge import PersistentDeltaStore
-
-class PostgresDeltaStore(PersistentDeltaStore):
-    def __init__(self, dsn: str):
-        super().__init__()
-        self.conn = psycopg2.connect(dsn)
-    
-    def _persist(self, delta):
-        # INSERT INTO nanda_deltas ...
-        pass
-    
-    def _load_since(self, seq):
-        # SELECT * FROM nanda_deltas WHERE seq > ...
-        pass
-```
-
-## MCP Tools
-
-Advertise MCP tools that agents can use:
-
-```python
-from sm_bridge import SmBridge, SmTool
-
-bridge = SmBridge(
-    registry_id="my-registry",
-    provider_name="My Company",
-    provider_url="https://example.com",
-    tools=[
-        SmTool(
-            tool_id="search",
-            description="Search the web",
-            endpoint="https://api.example.com/mcp/search",
-            params=["query", "limit"]
-        ),
-        SmTool(
-            tool_id="calculate",
-            description="Perform calculations",
-            endpoint="https://api.example.com/mcp/calculate",
-            params=["expression"]
-        )
-    ]
-)
-```
-
-## Registry Discovery
-
-The library serves `/.well-known/nanda.json` at the domain root (RFC 8615) via the separate `wellknown_router`:
-
-```json
-{
-  "registry_id": "my-registry",
-  "registry_did": "did:web:registry.example.com",
-  "namespaces": ["did:web:example.com:*"],
-  "index_url": "https://registry.example.com/nanda/index",
-  "resolve_url": "https://registry.example.com/nanda/resolve",
-  "deltas_url": "https://registry.example.com/nanda/deltas",
-  "tools_url": "https://registry.example.com/nanda/tools",
-  "provider": {
-    "name": "My Company",
-    "url": "https://example.com"
-  },
-  "capabilities": ["agentfacts", "deltas", "mcp-tools"]
-}
-```
-
-## Federating with NANDA
-
-To join the NANDA network:
-
-1. Deploy your registry with the NANDA bridge endpoints
-2. Ensure `/.well-known/nanda.json` is accessible
-3. Contact the MIT NANDA team to register as a federated peer
-4. (Optional) Implement incremental sync or gossip mechanisms for real-time or near-real-time federation
-
-## AI Catalog gateway
-
-`create_gateway_router` serves the AI Catalog discovery endpoints for the agents in a
-`DeltaStore`, alongside the `/nanda/*` router (the two surfaces are independent):
-
-```python
-from fastapi import FastAPI
-from sm_bridge import DeltaStore, create_gateway_router
-
-delta_store = DeltaStore()
-
-app = FastAPI()
-app.include_router(
-    create_gateway_router(delta_store, base_url="https://reg.example.com", domain="example.com")
-)
-```
-
-| Endpoint | Returns |
-|----------|---------|
-| `GET /.well-known/ai-catalog.json` | `CatalogDocument` — all agents |
-| `GET /agents/{slug}` | `CatalogEntry` — a pointer to the agent's card |
-| `GET /cards/{slug}.json` | A2A `AgentCard` (full `SmAgentFacts` included under `_meta`) |
-
-Each `SmAgentFacts` is translated into a `CatalogEntry` and an A2A `AgentCard` whose `url`
-is the agent's runtime. Point a NANDA index at `base_url` (as a `hosting_path=registry`
-entry) to make the agents discoverable through the AI Catalog flow.
-
-## Related Packages
-
-| Package | Question it answers |
-|---------|-------------------|
-| [`sm-model-provenance`](https://github.com/Sharathvc23/sm-model-provenance) | "Where did this model come from?" (identity, versioning, provider, NANDA serialization) |
-| [`sm-model-card`](https://github.com/Sharathvc23/sm-model-card) | "What is this model?" (unified metadata schema — type, status, risk level, metrics, weights hash) |
-| [`sm-model-integrity-layer`](https://github.com/Sharathvc23/sm-model-integrity-layer) | "Does this model's metadata meet policy?" (rule-based checks) |
-| [`sm-model-governance`](https://github.com/Sharathvc23/sm-model-governance) | "Has this model been cryptographically approved for deployment?" (approval flow with signatures, quorum, scoping, revocation) |
-| `sm-bridge` (this package) | "How do I expose this to the NANDA network?" (FastAPI router, AgentFacts models, delta sync) |
-
+| Package | Role |
+|---|---|
+| `sm-bridge` (this package) | Onboard any agent source to the NANDA Index, with a normalized verifiable proof of trust |
+| [`sm-arp`](https://github.com/Sharathvc23/sm-arp) | Agency Receipt Protocol — signed receipts for what an agent did |
+| [`sm-conformance`](https://github.com/Sharathvc23/sm-conformance) | Signed, offline-verifiable conformance badges |
 
 ## License
 
@@ -402,4 +213,4 @@ MIT
 
 ---
 
-*Personal research contributions aligned with [Project NANDA](https://projectnanda.org) standards. [Stellarminds.ai](https://stellarminds.ai)*
+*Aligned with [Project NANDA](https://projectnanda.org). Built by [Stellarminds.ai](https://stellarminds.ai).*
