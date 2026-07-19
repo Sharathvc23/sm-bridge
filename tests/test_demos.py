@@ -23,3 +23,7 @@ def test_demo1_switchboard_runs():
 
 def test_demo2_domainless_delegation_runs():
     assert asyncio.run(_load("demo2_domainless_delegation").main()) is True
+
+
+def test_demo3_ans_delegated_quilt_entry_runs():
+    assert asyncio.run(_load("demo3_ans_delegated_quilt_entry").main()) is True
