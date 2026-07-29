@@ -26,6 +26,16 @@ Usage:
 See https://github.com/projnanda for the official NANDA specification.
 """
 
+from .binding_write import (
+    BindingStore,
+    BindingWriteRequest,
+    RequestAuthenticator,
+    WriteAuthorizer,
+    WriteVerdict,
+    canonical_log_entry,
+    canonical_payload,
+    create_binding_write_router,
+)
 from .converter import AbstractAgentConverter, AgentConverter, SimpleAgent, SimpleAgentConverter
 from .federation import FederationPoller, PullResult, pull_deltas
 from .gateway import (
@@ -133,4 +143,13 @@ __all__ = [
     # Switchboard (v0.4) — cross-registry resolve, uniform response
     "Switchboard",
     "SwitchboardResult",
+    # Authenticated delegated binding write (injected authorizer + authenticator)
+    "create_binding_write_router",
+    "BindingStore",
+    "BindingWriteRequest",
+    "WriteAuthorizer",
+    "WriteVerdict",
+    "RequestAuthenticator",
+    "canonical_payload",
+    "canonical_log_entry",
 ]
