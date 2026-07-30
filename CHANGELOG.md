@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0] — authenticated delegated binding write
+
+- Release the registry-side write surface merged in #4: `BindingStore`,
+  `RequestAuthenticator`, and `create_binding_write_router` — a delegate applies an
+  authenticated, signed binding change through it. These were on `main` but not in a
+  published release; 0.5.0 puts them on PyPI (consumed by nanda-connect).
+
 ## [0.4.1] — docs
 
 - README rewritten to lead with what the bridge is and does (commercial + OSS tone); removed a
