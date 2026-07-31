@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+## [0.6.0] — Verifiable Agent Feed extra
+
 - **`[feed]` extra (additive, non-breaking):** `sm_bridge.feed.build_delta_feed` projects the
   delta log as a signed, hash-chained Verifiable Agent Feed (`sm-feed`); `read_delta_feed`
   verifies a page for authenticity + completeness and returns the verified deltas. Served
   **alongside** `/nanda/deltas` — no change to the existing endpoint, the delta store, or any
   core import. Opt in with `pip install 'sm-bridge[feed]'`.
+- Fixed `sm_bridge.__version__` (was pinned at `0.4.1`) to track the release.
 
 ## [0.5.0] — authenticated delegated binding write
 

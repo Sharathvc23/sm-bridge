@@ -2,7 +2,7 @@
 
 **Authors:** StellarMinds ([stellarminds.ai](https://stellarminds.ai))
 **Date:** April 2026
-**Version:** 0.3.0
+**Version:** 0.6.0
 
 ## Abstract
 
@@ -98,15 +98,20 @@ A complete federation workflow proceeds as follows:
 
 The governance layer's `approval_to_integrity_facts()` function converts cryptographic approvals into metadata that becomes discoverable through bridge endpoints, enabling consuming registries to filter agents by governance status.
 
+### Verifiable delta feed (the `[feed]` extra)
+
+Incremental sync over `/nanda/deltas?since={seq}` (step 4) asks a peer to *trust the server* for completeness — a registry could silently drop or reorder a delta and the puller could not tell. The optional `[feed]` extra closes that gap by projecting the same delta log as a **Verifiable Agent Feed** ([`sm-feed`](https://github.com/Sharathvc23/sm-feed)): each delta becomes one Ed25519-signed, hash-chained entry, and `sm_bridge.feed.build_delta_feed` / `read_delta_feed` let a subscriber verify **authenticity and completeness** of what it pulls, not just receive it. This is additive and non-breaking — it runs alongside `/nanda/deltas`, the core never imports `sm-feed`, and the projection is deterministic so a subscriber's `?since=<cursor>` is stable without the registry persisting the feed. A later coordinated release may deprecate the unsigned delta format in favour of it.
+
 ## References
 
 1. NANDA Protocol. "Network of AI Agents in Decentralized Architecture." https://projectnanda.org
 2. NANDA Quilt. "Quilt of Registries and Verified AgentFacts." https://github.com/aidecentralized/NANDA-Quilt-of-Registries-and-Verified-AgentFacts
 3. Google. "Agent-to-Agent (A2A) Protocol." https://github.com/google/A2A
 4. W3C. "Decentralized Identifiers (DIDs) v1.0." W3C Recommendation, July 2022. https://www.w3.org/TR/did-core/
+5. sm-feed. "The Verifiable Agent Feed." https://github.com/Sharathvc23/sm-feed
 
 ---
 
-*First published: 2026-04-15 | Last modified: 2026-04-15*
+*First published: 2026-04-15 | Last modified: 2026-07-31*
 
 *Personal research contributions aligned with [Project NANDA](https://projectnanda.org) standards. [Stellarminds.ai](https://stellarminds.ai)*
