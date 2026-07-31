@@ -28,10 +28,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install (trust + tlog + dev + federation extras)
+      - name: Install (trust + tlog + dev + federation + feed extras)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[trust,tlog,dev,federation]"
+          pip install -e ".[trust,tlog,dev,federation,feed]"
 
       - name: Ruff (lint + import order)
         run: ruff check sm_bridge tests examples
