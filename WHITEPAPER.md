@@ -2,7 +2,7 @@
 
 **Authors:** StellarMinds ([stellarminds.ai](https://stellarminds.ai))
 **Date:** April 2026
-**Version:** 0.3.0
+**Version:** 0.6.0
 
 ## Abstract
 
