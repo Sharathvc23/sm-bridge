@@ -69,18 +69,35 @@ def build_delta_feed(
 
 
 def read_delta_feed(
-    page: dict[str, Any], *, expected_prev_hash: str | None = None
+    page: dict[str, Any],
+    *,
+    expected_prev_hash: str | None = None,
+    expected_head: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[dict[str, Any]], dict[str, Any] | None]:
-    """Verify a delta-feed page and return ``(ok, reason, deltas, new_head)``.
+    """Verify a delta-feed page and return ``(ok, reason, deltas, cursor)``.
 
     ``ok`` is the result of ``sm_feed.verify_page`` — the page's entries must be
     authentic and a complete run from ``expected_prev_hash``. ``deltas`` are the
     verified ``sm-bridge/delta/0.1`` payloads; empty on any verification failure,
-    so a peer never applies an unverified delta. ``new_head`` is the cursor anchor
-    to persist for the next pull.
+    so a peer never applies an unverified delta.
+
+    ``expected_head`` is the ``{seq, entry_hash}`` of the last signed head this
+    puller accepted. **Pass it.** It is the whole of sm-feed's rewind defence
+    (SPEC §5 rule 6): without it a registry can serve a validly signed head behind
+    the history the puller already holds and the rewind is accepted. Omitting it
+    keeps the pre-0.2.0 behaviour, which is why it defaults to ``None`` rather
+    than being required.
+
+    ``cursor`` is sm-feed's cursor object — ``{seq, entry_hash, head,
+    complete_to_head}``. Persist ``cursor["entry_hash"]`` as the next
+    ``expected_prev_hash`` and ``cursor["head"]`` as the next ``expected_head``.
+    ``complete_to_head`` is ``False`` when the registry served a bounded prefix of
+    a long backlog, meaning there is more to pull.
     """
     sm_feed = _require_sm_feed()
-    ok, reason, head = sm_feed.verify_page(page, expected_prev_hash=expected_prev_hash)
+    ok, reason, head = sm_feed.verify_page(
+        page, expected_prev_hash=expected_prev_hash, expected_head=expected_head
+    )
     if not ok:
         return False, reason, [], None
     deltas = [

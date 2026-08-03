@@ -193,7 +193,7 @@ detects tampering.
 ## Verifiable Agent Feed (`[feed]`)
 
 The `[feed]` extra projects the delta log as a signed, hash-chained
-[Verifiable Agent Feed](https://github.com/Sharathvc23/sm-feed) — **alongside** `/nanda/deltas`,
+[Verifiable Agent Feed](https://verifeed.ai) — **alongside** `/nanda/deltas`,
 not replacing it. `sm_bridge.feed.build_delta_feed(deltas, identity, ...)` returns a signed
 `feed-page` a peer subscribes to with `?since=<cursor>`; `read_delta_feed(page)` verifies it for
 **authenticity and completeness** (no dropped or reordered delta) and returns the verified

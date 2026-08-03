@@ -63,7 +63,7 @@ tlog = [
 # Verifiable Agent Feed extra: project the delta log as a signed sm-feed a peer
 # can subscribe to and verify for completeness. Core never imports sm-feed.
 feed = [
-    "sm-feed>=0.1.0",
+    "sm-feed>=0.2.0",
 ]
 all = [
     "sm-model-integrity-layer>=0.1.0",
@@ -71,7 +71,7 @@ all = [
     "sm-model-card>=0.1.0",
     "sm-model-provenance>=0.1.0",
     "httpx>=0.24.0",
-    "sm-feed>=0.1.0",
+    "sm-feed>=0.2.0",
 ]
 dev = [
     "pytest>=7.0.0",

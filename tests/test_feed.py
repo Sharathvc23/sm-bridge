@@ -77,6 +77,43 @@ def test_tampered_page_yields_no_deltas():
     assert not ok and deltas == [] and head is None
 
 
+def test_expected_head_is_passed_through_and_catches_a_rewind():
+    """sm-feed's rewind defence only runs when the puller supplies the head it
+    pinned (SPEC §5 rule 6). Before 0.2.0 this argument did not exist and a
+    registry could serve a validly signed head behind the history the puller
+    already held. This pins the passthrough."""
+    from sm_feed import build_signed_head
+
+    idn = Identity.from_seed(b"\x09" * 32)
+    store = _store(4)
+    page = build_delta_feed(store.since(0), idn, generated_at=AT)
+    ok, reason, _, cursor = read_delta_feed(page, expected_prev_hash=None)
+    assert ok, reason
+
+    # The registry now serves an empty page whose signed head sits behind the one
+    # the puller already accepted.
+    behind = page["entries"][1]
+    rewound = {
+        "version": "feed-page/0.1",
+        "feed_id": page["feed_id"],
+        "since": cursor["seq"],
+        "entries": [],
+        "head": build_signed_head(
+            idn, seq=behind["seq"], entry_hash=behind["entry_hash"], generated_at=AT
+        ),
+    }
+
+    ok, reason, deltas, _ = read_delta_feed(
+        rewound, expected_prev_hash=cursor["entry_hash"], expected_head=cursor["head"]
+    )
+    assert not ok and deltas == []
+    assert "rewind" in reason, reason
+
+    # Omitting expected_head keeps the pre-0.2.0 behaviour: the rewind is accepted.
+    ok, _, _, _ = read_delta_feed(rewound, expected_prev_hash=cursor["entry_hash"])
+    assert ok, "documents why passing expected_head is not optional in practice"
+
+
 def test_projection_is_deterministic():
     # Same deltas + same identity ⇒ byte-identical feed, so ?since is stable.
     idn = Identity.from_seed(b"\x07" * 32)
