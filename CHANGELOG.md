@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- **`[feed]` extra now requires `sm-feed>=0.2.0`.** `0.1.x` is incompatible with
+  partial pages: `sm-feed` split the page wire version because relaxing the head
+  constraint changed its verification contract. Complete pages still declare
+  `feed-page/0.1` and a `0.1.x` subscriber verifies them unchanged; partial pages
+  declare `feed-page/0.2`.
+- **`read_delta_feed` accepts `expected_head`** and passes it to
+  `sm_feed.verify_page`. This is the whole of sm-feed's rewind defence (SPEC §5
+  rule 6): without it a registry can serve a validly signed head behind the history
+  the puller already holds and the rewind is accepted. Optional for compatibility,
+  and the docstring says plainly that it should always be passed.
+- `read_delta_feed`'s fourth return value is now sm-feed's cursor object —
+  `{seq, entry_hash, head, complete_to_head}`. `entry_hash` is still the next
+  `expected_prev_hash`, so the existing idiom is unchanged; `head` is what to pass
+  back as `expected_head`, and `complete_to_head` is `False` when the registry
+  served a bounded prefix of a long backlog.
+- Documentation links to the Verifiable Agent Feed now point at the published
+  specification (https://verifeed.ai) instead of a repository that is not public.
+
 ## [0.6.0] — Verifiable Agent Feed extra
 
 - **`[feed]` extra (additive, non-breaking):** `sm_bridge.feed.build_delta_feed` projects the
