@@ -65,6 +65,11 @@ tlog = [
 feed = [
     "sm-feed>=0.2.0",
 ]
+# VAID delegation-chain trust profile: a thin adapter over the upstream vaid-a2a
+# reference verifier (pulls in vaid-mint). Core never imports this profile.
+vaid = [
+    "vaid-a2a>=0.2.1,<0.3",
+]
 all = [
     "sm-model-integrity-layer>=0.1.0",
     "sm-model-governance>=0.1.0",
@@ -132,6 +137,12 @@ plugins = ["pydantic.mypy"]
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
+
+# vaid-a2a / vaid-mint (the [vaid] extra) ship no py.typed marker yet; the VAID
+# delegation profile still type-checks strictly, it just can't see their signatures.
+[[tool.mypy.overrides]]
+module = ["vaid_a2a.*", "vaid_mint.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
