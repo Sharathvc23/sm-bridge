@@ -8,6 +8,12 @@ The short version: **sm-bridge serves; it does not register.** Registration is a
 authenticated calls you make once. Serving is what the bridge is for, and the Index
 only ever fetches two things from you.
 
+> **For the current specification, see [nandaindex.org](https://nandaindex.org).** This
+> page describes what the Index expects of a registry as of this release, which is a
+> moving target — the identifier scheme and the media-type vocabulary have both changed
+> once already. Where the two disagree, nandaindex.org is authoritative and this page is
+> the thing to fix.
+
 ## 1. Register your entry
 
 Registration is an authenticated flow against the Index (create the org, raise a DNS
@@ -130,3 +136,8 @@ Getting listed makes you reachable. It says nothing about whether anything you s
 verifiable. That is the other half of this library — a trust profile per source,
 normalised to one proof block — and it is independent of everything above. See
 [`trust-profiles.md`](trust-profiles.md).
+
+---
+
+The Index's own contract is specified at [nandaindex.org](https://nandaindex.org); check
+there first if something here does not match what the Index does.
