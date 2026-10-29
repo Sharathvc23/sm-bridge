@@ -2,7 +2,49 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /agents/search?q=...` on the AI-Catalog gateway — the NANDA Index's fan-out
+  hop.** This is the one path the Index fetches from a registrant: an entry registered
+  with the enterprise catalog media type is expanded at query time via
+  `GET <registry_url>/agents/search?q=...`, and a registry that does not answer is
+  recorded as **unreachable** and contributes nothing to the Index's search, however
+  complete its catalog. A bridge-backed registry was in that position: the gateway
+  served the catalog, the per-agent entry and the A2A card, but not the only path the
+  Index actually calls.
+
+  The response is a `CatalogDocument`, which already matched the Index's wire shape
+  exactly — `{specVersion, entries}` with camelCase `identifier` / `displayName` /
+  `mediaType` / `url` / `description` / `tags` / `version` / `updatedAt` / `metadata`.
+  So this is a route, not a remodel, and it answers with the same entries as
+  `/.well-known/ai-catalog.json`, narrowed by `q`.
+
+  Matching is a case-insensitive substring over the fields an entry actually declares
+  (name, description, tags, identifier), so a match can always be explained by
+  something the source said. It is deliberately **not** a relevance ranking: the Index
+  ranks across registries itself, and a score invented per registry would compete with
+  that while meaning something different in each one.
+
+  Two behaviours worth knowing, both pinned by tests:
+  - A query matching nothing is a `200` with no entries, not an error. "Asked, nothing
+    matched" and "unreachable" are different claims, and only the registry can tell
+    them apart.
+  - The route is registered **before** `/agents/{slug}`, so an agent whose slug is
+    literally `search` is shadowed on that path. It remains in the catalog and remains
+    a fan-out candidate.
+
 ### Fixed
+
+- **The A2A card no longer names its agent with an identifier the Index refuses.**
+  `to_a2a_card` put `urn:ai:domain:<domain>:agent:<slug>` in the card's `_meta`. The
+  Index rejects that form outright, so every card the gateway served carried a
+  self-identifier nothing upstream would accept. It is now the AIR URN
+  `urn:air:<domain>:agent:<slug>`, with the publisher domain lower-cased as the Index
+  normalises it — an identifier differing only in case is a different string
+  downstream.
+
+  **Breaking** for anything reading `_meta.identifier`, which is why it is called out
+  rather than filed as a detail. The old value was not usable with the Index it named.
 
 - **An AIR URN anchored to this registry's own domain now resolves against it.**
   The NANDA Index keys every entry on an ARD domain-anchored resource identifier —
