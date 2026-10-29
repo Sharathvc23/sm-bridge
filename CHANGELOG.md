@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **An AIR URN anchored to this registry's own domain now resolves against it.**
+  The NANDA Index keys every entry on an ARD domain-anchored resource identifier —
+  `urn:air:<publisher-FQDN>:<namespace...>:<short-name>` — and the publisher FQDN is
+  the ownership anchor: the registrant proves control of it by DNS TXT challenge
+  before the Index will issue an identifier under it.
+
+  `0.7.0` refused every `urn:` as naming "a foreign authority by construction".
+  That is true of a URN whose namespace carries its own authority, and it stays
+  refused; it is not true of an AIR URN naming the FQDN we are. The bridge was
+  rejecting, with a `400`, the one identifier the Index holds for its own agents.
+
+  An AIR URN is now anchored the same way a `did:web` already was — publisher FQDN
+  compared against `provider_url`, reduced to the short name when it matches, `None`
+  (and so a `400`) when it names another publisher. Every other URN is unchanged.
+
+  The Index's own `resolve` returns the short name alone, so a consumer that reads
+  only that output was never affected; one holding the canonical identifier was. A
+  registry onboarded through this library should not have to patch its own adapter
+  when the Index changes how it names things — absorbing that is what the bridge is
+  for.
+
+  Two details, both deliberate:
+  - The FQDN comparison drops any port and path from `provider_url` and lower-cases
+    the result, because neither can appear in the segment being compared. This is
+    `_publisher_fqdn`, kept separate from `_did_authority`, which must keep
+    reproducing whatever a `did:web` carries.
+  - The `urn:` scheme and the `air` NID are matched case-insensitively, per RFC 8141
+    and as the Index normalises them. A URN in some other case previously fell
+    through to be treated as a local agent id; it is now refused with the rest.
+
 ## [0.8.0] — 2026-08-27
 
 ### Changed — BREAKING

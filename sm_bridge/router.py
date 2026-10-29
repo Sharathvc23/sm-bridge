@@ -261,6 +261,26 @@ def _did_authority(provider_url: str) -> str:
     return authority.rstrip("/")
 
 
+#: Scheme and NID of an ARD domain-anchored resource identifier (AIR URN), the form
+#: the NANDA Index keys every entry on. Matched case-insensitively: RFC 8141 defines
+#: both as case-insensitive, and the Index normalises them to lower case.
+_AIR_URN_PREFIX = "urn:air:"
+
+
+def _publisher_fqdn(provider_url: str) -> str:
+    """This registry's publisher FQDN, as it appears in an AIR URN.
+
+    An AIR URN's publisher segment is a bare FQDN — the Index validates it as one
+    and the registrant proves control of it by DNS TXT challenge. So unlike
+    `_did_authority`, which reproduces whatever a `did:web` carries, this drops any
+    port and path from the provider URL and lower-cases the result: those cannot
+    appear in the segment being compared, and leaving them in would fail to anchor
+    an identifier that is in fact ours.
+    """
+    authority = provider_url.split("://", 1)[-1]
+    return authority.split("/", 1)[0].split(":", 1)[0].lower()
+
+
 def _parse_agent_identifier(value: str, registry_id: str, provider_url: str) -> str | None:
     """Reduce an identifier to a local agent id, or None if it is not ours.
 
@@ -280,8 +300,10 @@ def _parse_agent_identifier(value: str, registry_id: str, provider_url: str) -> 
     - `@this-registry[:ns]/agent`                -> `agent`
     - `@agent`                                   -> `agent`   (names no scope)
     - `did:web:<our-host>:...:agent`             -> `agent`
+    - `urn:air:<our-fqdn>:<ns...>:agent`         -> `agent`   (the Index's own form)
     - `@other-registry/agent`                    -> None
     - `did:web:other.example:...:agent`          -> None
+    - `urn:air:other.example:<ns...>:agent`      -> None      (another publisher)
     - `urn:...`                                  -> None      (foreign by construction)
 
     Anything else is returned whole. A colon is NOT evidence of a namespace: the
@@ -308,8 +330,36 @@ def _parse_agent_identifier(value: str, registry_id: str, provider_url: str) -> 
             return None
         return value[len(local_prefix) :].split(":")[-1] or None
 
-    # URN — names an authority we are not.
-    if value.startswith("urn:"):
+    # AIR URN — an ARD domain-anchored resource identifier:
+    #
+    #     urn:air:<publisher-FQDN>:<namespace...>:<short-name>
+    #
+    # The NANDA Index keys every entry on one of these, and the publisher FQDN is
+    # the ownership anchor: the registrant proves control of it by DNS TXT challenge
+    # before the Index will issue an identifier under it. So an AIR URN naming our
+    # own FQDN names US — exactly as a `did:web` under our host does — and refusing
+    # it means refusing this registry's own canonical identifier.
+    #
+    # The Index's `resolve` returns the short-name alone, so a consumer that only
+    # ever sees that output is unaffected. One holding the canonical identifier (the
+    # key every index record carries) is not, and resolving it is this library's job
+    # rather than each consumer's: a registry onboarded through the bridge should not
+    # have to patch its own adapter when the Index changes how it names things.
+    lowered = value.lower()
+    if lowered.startswith(_AIR_URN_PREFIX):
+        domain, _, path = value[len(_AIR_URN_PREFIX) :].partition(":")
+        if domain.lower() != _publisher_fqdn(provider_url):
+            return None
+        # `<namespace...>:<short-name>` — at least one namespace segment and a name,
+        # the same minimum the Index enforces. The namespace may have more than one
+        # segment; the short name is the last.
+        segments = path.split(":")
+        if len(segments) < 2:
+            return None
+        return segments[-1] or None
+
+    # Every other URN names an authority we are not.
+    if lowered.startswith("urn:"):
         return None
 
     return value
