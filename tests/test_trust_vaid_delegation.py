@@ -5,12 +5,14 @@ honesty-rule cases this profile adds on top of the upstream verdict.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from vaid_a2a.conformance import load_vector, vector_names
-from vaid_mint.revocation import InMemoryRevocationList
+from vaid_mint.revocation import InMemoryRevocationList, RevocationStatus
 
 from sm_bridge.trust import ProofStatus
-from sm_bridge.trust.vaid_delegation import VaidDelegationProfile
+from sm_bridge.trust.vaid_delegation import VaidDelegationProfile, VaidRevocationSource
 
 # name -> what this vector exercises, for readable test ids.
 _COVERED = {
@@ -126,3 +128,83 @@ async def test_missing_trust_config_is_not_verified() -> None:
     result = await profile.verify(None, {"leaf": vector["inputs"]["leaf"]})
     assert result.status is ProofStatus.NOT_VERIFIED
     assert "trust_config" in result.failure_reason
+
+
+# ----- VaidRevocationSource: the injected protocol, not a concrete list type ---------
+
+class _StubRevocation:
+    """A hand-rolled VaidRevocationSource, never importing vaid_mint's concrete
+    InMemoryRevocationList, to prove the protocol -- not that one implementation -- is
+    the contract."""
+
+    def __init__(self, status: RevocationStatus) -> None:
+        self._status = status
+
+    def check_lineage(self, lineage: list[str]) -> RevocationStatus:
+        return self._status
+
+
+def test_stub_revocation_source_satisfies_the_protocol() -> None:
+    assert isinstance(_StubRevocation(RevocationStatus.NOT_REVOKED), VaidRevocationSource)
+
+
+@pytest.mark.asyncio
+async def test_protocol_stub_reporting_revoked_fails() -> None:
+    vector = load_vector("01-valid-two-hop-chain.json")
+    profile = VaidDelegationProfile(revocation=_StubRevocation(RevocationStatus.REVOKED))
+    result = await profile.verify(None, _evidence_for(vector))
+    assert result.status is ProofStatus.FAILED
+    assert "revoked" in result.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_protocol_stub_reporting_not_revoked_passes() -> None:
+    vector = load_vector("01-valid-two-hop-chain.json")
+    profile = VaidDelegationProfile(revocation=_StubRevocation(RevocationStatus.NOT_REVOKED))
+    result = await profile.verify(None, _evidence_for(vector))
+    assert result.status is ProofStatus.VERIFIED, result.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_no_revocation_source_injected_is_not_verified() -> None:
+    # Restated against the protocol directly: no VaidRevocationSource at all, not merely
+    # an unavailable one, is NOT_VERIFIED even on an otherwise-clean chain.
+    vector = load_vector("01-valid-two-hop-chain.json")
+    profile = VaidDelegationProfile(revocation=None)
+    result = await profile.verify(None, _evidence_for(vector))
+    assert result.status is ProofStatus.NOT_VERIFIED
+    assert "revocation" in result.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_profile_reads_no_config_env_var_has_no_effect() -> None:
+    # The profile verifies only what it is handed: construction + evidence. Setting an
+    # environment variable that names every input this profile could plausibly read from
+    # config must change nothing about the verdict.
+    vector = load_vector("01-valid-two-hop-chain.json")
+    evidence = _evidence_for(vector)
+    profile = VaidDelegationProfile(revocation=_StubRevocation(RevocationStatus.NOT_REVOKED))
+
+    baseline = await profile.verify(None, evidence)
+
+    env_keys = [
+        "VAID_REVOCATION_LIST",
+        "VAID_TRUST_CONFIG",
+        "VAID_TRUSTED_ISSUERS",
+        "SM_BRIDGE_VAID_CONFIG",
+        "SM_BRIDGE_CONFIG",
+    ]
+    previous = {k: os.environ.get(k) for k in env_keys}
+    try:
+        for k in env_keys:
+            os.environ[k] = "/nonexistent/should-never-be-read.json"
+        with_env = await profile.verify(None, evidence)
+    finally:
+        for k, v in previous.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    assert with_env.status is baseline.status is ProofStatus.VERIFIED
+    assert with_env.evidence_ref == baseline.evidence_ref

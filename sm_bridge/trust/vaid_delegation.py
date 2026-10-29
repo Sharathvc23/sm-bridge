@@ -32,15 +32,43 @@ imports this module.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from sm_bridge.trust.base import ProofResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from vaid_mint.revocation import RevocationCheck
+    from vaid_mint.revocation import RevocationStatus
 
 profile_id = "vaid-delegation"
 _METHOD = "vaid-a2a-ext-v1"
+
+
+@runtime_checkable
+class VaidRevocationSource(Protocol):
+    """The revocation seam this profile accepts at construction. A protocol, not a
+    concrete list type: any object shaped like this satisfies it, so a durable backend
+    drops in later without this module changing. ``InMemoryRevocationList`` (the CLI's
+    ``--revocation-list`` flag) is one implementation of this seam, never the contract
+    itself.
+
+    Mirrors ``vaid_mint.revocation.RevocationCheck`` exactly (method name and the
+    three-state return), so every object that already satisfies vaid-mint's own seam
+    satisfies this one with no adapter. That is a deliberate choice over a boolean
+    ``is_revoked(lineage) -> bool`` shape: vaid-mint replaced a boolean revocation seam
+    with this three-state one specifically because a bool cannot distinguish "checked,
+    and clean" from "the backing store could not be consulted" -- collapsing the second
+    case into the first is exactly the silent-pass failure mode this package's honesty
+    contract exists to prevent. A caller is free to wrap a simpler boolean check into
+    this shape (mapping "unknown" to ``UNAVAILABLE``, never to ``NOT_REVOKED``), but this
+    profile does not accept the lossy shape directly.
+    """
+
+    def check_lineage(self, lineage: list[str]) -> RevocationStatus:
+        """Report revocation for an already-assembled, ordered lineage (root first,
+        leaf last). ``REVOKED`` if any id in ``lineage`` is revoked, ``NOT_REVOKED`` if
+        the store was consulted and none are, ``UNAVAILABLE`` if the store could not be
+        consulted -- never collapse the last case into the second."""
+        ...
 
 
 def _parse_when(value: Any) -> datetime | None:
@@ -70,8 +98,9 @@ class VaidDelegationProfile:
           "now": <RFC3339 str> | <unix seconds> | None,
         }
 
-    The revocation seam is injected at construction (``revocation=...``), never read from
-    evidence: a caller configures it once, the same way the upstream extension requires
+    The revocation seam is injected at construction (``revocation=...``) as a
+    :class:`VaidRevocationSource`, never read from evidence and never read from config of
+    any kind: a caller wires it once, the same way the upstream extension requires
     (``vaid_a2a.verify_a2a_message``'s ``revocation`` parameter is never resolved by the
     verifier itself). If no revocation source is configured, every call returns an honest
     ``NOT_VERIFIED``, never a pass that silently skipped the revocation check.
@@ -79,7 +108,7 @@ class VaidDelegationProfile:
 
     profile_id = profile_id
 
-    def __init__(self, revocation: RevocationCheck | None = None) -> None:
+    def __init__(self, revocation: VaidRevocationSource | None = None) -> None:
         self._revocation = revocation
 
     async def verify(self, subject: Any, evidence: dict[str, Any]) -> ProofResult:
@@ -88,7 +117,7 @@ class VaidDelegationProfile:
                 profile=self.profile_id,
                 method=_METHOD,
                 reason="no revocation source configured for vaid-delegation; inject a "
-                "RevocationCheck (e.g. vaid_mint.revocation.InMemoryRevocationList) "
+                "VaidRevocationSource (e.g. vaid_mint.revocation.InMemoryRevocationList) "
                 "before verifying, never a pass with revocation silently skipped",
             )
 
@@ -173,4 +202,4 @@ class VaidDelegationProfile:
         )
 
 
-__all__ = ["VaidDelegationProfile", "profile_id"]
+__all__ = ["VaidDelegationProfile", "VaidRevocationSource", "profile_id"]

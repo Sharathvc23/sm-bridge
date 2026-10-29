@@ -9,6 +9,11 @@ Also shows the honesty rule this profile enforces on top of the upstream verdict
 with no revocation source configured at all, the clean chain is reported
 NOT_VERIFIED, never a silent pass.
 
+The revocation source is a constructor-injected VaidRevocationSource protocol, not a
+concrete list type: the final section wires in a hand-rolled implementation (not
+vaid-mint's InMemoryRevocationList) to show that any object shaped like the protocol
+is accepted, not just the one bundled implementation.
+
 Requires the [vaid] extra:  pip install 'sm-bridge[vaid]'
 Run offline, no external services:  python examples/demo4_vaid_delegation.py
 """
@@ -18,10 +23,26 @@ from __future__ import annotations
 import asyncio
 
 from vaid_a2a.conformance import load_vector
-from vaid_mint.revocation import InMemoryRevocationList
+from vaid_mint.revocation import InMemoryRevocationList, RevocationStatus
 
 from sm_bridge.trust import ProofStatus
-from sm_bridge.trust.vaid_delegation import VaidDelegationProfile
+from sm_bridge.trust.vaid_delegation import VaidDelegationProfile, VaidRevocationSource
+
+
+class DemoRevocationSource:
+    """A from-scratch VaidRevocationSource, independent of vaid-mint's own
+    InMemoryRevocationList, to show that the protocol -- not that one class -- is the
+    contract a production revocation backend needs to satisfy."""
+
+    def __init__(self, revoked: set[str]) -> None:
+        self._revoked = revoked
+
+    def check_lineage(self, lineage: list[str]) -> RevocationStatus:
+        return (
+            RevocationStatus.REVOKED
+            if any(vaid_id in self._revoked for vaid_id in lineage)
+            else RevocationStatus.NOT_REVOKED
+        )
 
 
 def _rule(title: str) -> None:
@@ -67,7 +88,15 @@ async def main() -> bool:
     print(f" failure_reason : {not_verified.failure_reason}")
     assert not_verified.status is ProofStatus.NOT_VERIFIED
 
-    print("\nAll three outcomes matched the honesty rule.")
+    _rule("A revocation source that is a protocol, not a concrete list type")
+    own_revocation_source: VaidRevocationSource = DemoRevocationSource(revoked=set())
+    custom_profile = VaidDelegationProfile(revocation=own_revocation_source)
+    custom_verified = await custom_profile.verify(None, _evidence_for(valid_vector))
+    print(f" status       : {custom_verified.status.value}")
+    print(f" method       : {custom_verified.method}")
+    assert custom_verified.status is ProofStatus.VERIFIED
+
+    print("\nAll four outcomes matched the honesty rule.")
     return True
 
 
