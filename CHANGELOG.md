@@ -9,7 +9,9 @@
   routing table, what `registry_url` must point at, how the AIR URN identifier is derived
   (and the two older forms the Index refuses), the two paths the Index fetches from a
   registrant, and the `match: "publisher"` trap that makes a `200` from the Index's resolve
-  not a claim about the agent you asked for.
+  not a claim about the agent you asked for. Points at
+  [nandaindex.org](https://nandaindex.org) as the authoritative, current spec — what the
+  Index expects is a moving target, and this page is the thing to fix when the two disagree.
 
   Written because the library serves the Index but never said what the Index expects, so
   the information lived in whichever consumer had most recently been broken by it. It also
