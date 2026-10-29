@@ -326,8 +326,8 @@ class SimpleAgentConverter:
 
         # NANDA requires minItems:1, so a source with no skills cannot be
         # represented without one. The placeholder stays, but it is recorded in
-        # `synthesized` below so a consumer can tell it apart from a skill the
-        # source actually declared.
+        # `provenance.invented` below so a consumer can tell it apart from a
+        # skill the source actually declared.
         if not skills:
             invented.append("skills")
             skills.append(
@@ -391,11 +391,18 @@ class SimpleAgentConverter:
                     "defaulted": defaulted,
                     "dropped": dropped,
                 },
-                # Deprecated alias for provenance.invented, kept one release for
-                # anyone who adopted it in 0.7.0. Removed in 0.9.0.
-                "synthesized": [f for f in invented if f == "skills"],
             }
         }
+
+        # `synthesized` was this bridge's own marker until 0.9.0 removed it in
+        # favour of `provenance.invented`. Removing it is not enough: the source's
+        # metadata is spread into the same block, so a source supplying its own
+        # `synthesized` would land exactly where our marker used to be, and a
+        # consumer still reading the 0.7.0 field would read a source-controlled
+        # value believing it was ours. The field is therefore absent rather than
+        # merely unwritten — a lagging reader gets nothing, which it can detect,
+        # instead of a plausible claim it cannot.
+        metadata[f"x_{self.registry_id.replace('-', '_')}"].pop("synthesized", None)
 
         proof = self._build_proof(agent)
 

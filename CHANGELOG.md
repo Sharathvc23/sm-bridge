@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Removed — BREAKING
+
+- **The deprecated `synthesized` extension field is gone**, as 0.8.0 said it would be in
+  this release. `provenance.invented` carries the same fact and carries it for every
+  field, not just `skills`.
+
+  Removing it was not sufficient on its own, and the second half matters more than the
+  first. The source's own metadata is spread into the same extension block, and the old
+  marker was written *after* that spread precisely so a source could not shadow the
+  bridge's statement about its own output. Delete the write and that protection goes with
+  it: a source supplying `"synthesized": [...]` would land exactly where our marker used
+  to be, and a consumer still reading the 0.7.0 field would read a **source-controlled**
+  value believing it was ours.
+
+  So the field is now actively absent rather than merely unwritten — a source cannot
+  reoccupy it. A lagging reader gets nothing, which it can detect, instead of a plausible
+  claim it cannot. Pinned by
+  `test_a_source_cannot_reoccupy_the_removed_synthesized_field`.
+
+  **Migration:** read `metadata[<ext>]["provenance"]["invented"]` and check for
+  `"skills"`.
+
 ### Documentation
 
 - **[`docs/nanda-index-onboarding.md`](docs/nanda-index-onboarding.md)** — the end-to-end
