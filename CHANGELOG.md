@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`create_gateway_router(..., is_listed=...)` — a registry's own rule for who may be
+  enumerated.** The gateway published everything in the `DeltaStore`, with no way to
+  express "this agent exists but has not consented to be listed". A registry with such a
+  rule therefore could not use the gateway at all, and hand-wrote the whole Index-facing
+  surface instead — then had to keep its catalog, its feed and its re-seed agreeing with
+  each other by hand. That is a gap in this library, not a quirk of the registry that hit
+  it.
+
+  `is_listed` is `(slug, facts) -> bool`, and it gates the two **enumerating** surfaces —
+  `/.well-known/ai-catalog.json` and `/agents/search` — from a single computation, so a
+  registry cannot publish two different claims about who it lists. Default `None` lists
+  everything in the store, which is the previous behaviour exactly.
+
+  It deliberately does **not** gate `/agents/{slug}` or `/cards/{slug}.json`. Those answer
+  about an agent the caller already named, and neither available behaviour is honest: a
+  `403` discloses the agent while refusing it, and a `404` is a positive claim of absence
+  about an agent this registry is holding — which a corroborator reads as a false
+  omission. The Index's own resolution hop for a legitimately registered entry also comes
+  through that path, so gating it would `404` the Index against an agent that is properly
+  listed on it.
+
+  The boundary is therefore **withheld from the listing, still resolvable by name**, and
+  it is pinned by a test rather than left to be discovered. A registry that needs an agent
+  to be unreachable rather than unlisted should keep it out of the `DeltaStore`: absence
+  from the store is the only honest way to say an agent is not here.
+
 ## [0.9.0] — 2026-10-29
 
 ### Removed — BREAKING

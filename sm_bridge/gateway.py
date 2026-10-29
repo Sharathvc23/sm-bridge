@@ -190,6 +190,11 @@ def to_a2a_card(facts: SmAgentFacts, slug: str, domain: str, base_url: str) -> A
     )
 
 
+#: A registry's own rule for who may be *enumerated* on the public catalog surfaces.
+#: Takes the agent's slug and its facts; returns False to withhold it.
+ListingPredicate = Callable[[str, SmAgentFacts], bool]
+
+
 def create_gateway_router(
     delta_store: DeltaStore,
     base_url: str,
@@ -197,31 +202,63 @@ def create_gateway_router(
     *,
     slug_of: Callable[[SmAgentFacts], str] | None = None,
     prefix: str = "",
+    is_listed: ListingPredicate | None = None,
 ) -> APIRouter:
     """Create the AI Catalog router for a registry's agents.
 
     Args:
         delta_store: the registry's DeltaStore (the federation-synced state).
         base_url: public URL where this gateway is reachable (``registry_url`` in the Index).
-        domain: org domain used in the agent ``urn`` (``urn:ai:domain:<domain>:agent:<slug>``).
+        domain: publisher FQDN used in the agent's AIR URN (``urn:air:<domain>:agent:<slug>``).
         slug_of: how to derive the catalog slug from facts (default: handle/DID tail).
         prefix: optional URL prefix.
+        is_listed: the registry's own rule for who may be **enumerated** on the public
+            catalog surfaces — ``(slug, facts) -> bool``. Default: everything in the
+            store is listed. See the note below on what it does and does not gate.
 
     Returns:
-        An ``APIRouter`` serving ``/.well-known/ai-catalog.json``, ``/agents/{slug}``
-        and ``/cards/{slug}.json``.
+        An ``APIRouter`` serving ``/.well-known/ai-catalog.json``, ``/agents/search``,
+        ``/agents/{slug}`` and ``/cards/{slug}.json``.
+
+    **What ``is_listed`` gates, and why not everything.**
+
+    It gates the two **enumerating** surfaces — the catalog document and the Index's
+    fan-out search — with one predicate, so they cannot disagree about who is
+    discoverable. A registry whose index and search answered with different agent sets
+    would be publishing two incompatible claims about itself.
+
+    It deliberately does **not** gate ``/agents/{slug}`` or ``/cards/{slug}.json``.
+    Those answer about an agent the caller already named, and neither available
+    behaviour is honest: a ``403`` discloses that the agent exists while refusing it,
+    and a ``404`` is a positive claim of absence about an agent this registry is in fact
+    holding — which a corroborator would read as a false omission. Worse, an entry
+    published on the Index resolves through exactly this path, so gating it would
+    ``404`` the Index's own resolution hop for an agent that is legitimately registered.
+
+    So the boundary is: **withheld from the listing, still resolvable by name.** If your
+    registry needs an agent to be unreachable rather than merely unlisted, keep it out
+    of the ``DeltaStore`` — absence from the store is the only honest way to say an
+    agent is not here.
     """
     slug_fn = slug_of or default_slug
+    listed = is_listed or (lambda _slug, _facts: True)
     base = base_url.rstrip("/")
     router = APIRouter(prefix=prefix, tags=["nanda-ai-catalog"])
 
+    def listed_entries() -> list[CatalogEntry]:
+        """The entries both enumerating surfaces publish — one rule, computed once.
+
+        The catalog document and the Index's fan-out answer from this, so a registry
+        cannot end up publishing two different claims about who it lists.
+        """
+        agents = current_facts(delta_store, slug_fn)
+        return [
+            to_catalog_entry(f, slug, base) for slug, f in agents.items() if listed(slug, f)
+        ]
+
     @router.get("/.well-known/ai-catalog.json", response_model=CatalogDocument)
     def ai_catalog() -> CatalogDocument:
-        agents = current_facts(delta_store, slug_fn)
-        return CatalogDocument(
-            host=base,
-            entries=[to_catalog_entry(f, slug, base) for slug, f in agents.items()],
-        )
+        return CatalogDocument(host=base, entries=listed_entries())
 
     # MUST be registered before `/agents/{slug}`: FastAPI matches in registration
     # order, so the parameterised route would otherwise capture "search" as a slug
@@ -240,10 +277,13 @@ def create_gateway_router(
         invented here would compete with that while meaning something different for
         every registry.
         """
-        agents = current_facts(delta_store, slug_fn)
-        entries = [to_catalog_entry(f, slug, base) for slug, f in agents.items()]
-        return CatalogDocument(host=base, entries=[e for e in entries if _matches(e, q)])
+        return CatalogDocument(
+            host=base, entries=[e for e in listed_entries() if _matches(e, q)]
+        )
 
+    # `is_listed` is deliberately NOT applied here or to the card below: these answer
+    # about an agent the caller already named, and the Index's own resolution hop comes
+    # through this path for a legitimately registered entry. See create_gateway_router.
     @router.get("/agents/{slug}", response_model=CatalogEntry)
     def get_agent(slug: str) -> CatalogEntry:
         facts = current_facts(delta_store, slug_fn).get(slug)
