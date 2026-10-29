@@ -31,6 +31,7 @@ result = await registry.verify("ed25519-agentcard", subject, evidence)
 | `dns-aid` | DNS-AID (IETF draft-mozleywilliams) SVCB + DNSSEC + DANE | `{fqdn, verify_dane_cert?}` | a DNSSEC-authenticated SVCB record (+ DANE when requested) | DNSSEC bogus / bad SVCB / DANE mismatch → FAILED; unsigned zone / no record → NOT_VERIFIED | **consumes the upstream `dns-aid` PyPI package** (`dns_aid.core.validator.verify`) — thin adapter, never forked |
 | `jws-catalog` | A signed AI-Catalog (ARD / Cisco AGNTCY discovery) | `{entries, signature (detached JWS), jwks \| public_key}` | ES256 detached JWS verifies over the JCS-canonical entries | tampered entry (catalog hijack), wrong key → FAILED; missing pieces → NOT_VERIFIED | implements the AI-Catalog signed-catalog contract (ES256 detached JWS over RFC 8785 entries) |
 | `nanda-delegation` | A domainless `did:key` delegation chain | `{chain, signatures, status_tokens, provider_scopes, now?}` | every hop's **ES256 (P-256)** JWS verifies, scopes contain (no escalation), windows nest, tokens fresh-ACTIVE | scope escalation, over-depth, expired/non-nested window, revoked ancestor, stale token, forged sig → FAILED | implements the delegation-chain model over ES256/P-256 detached JWS (subjects/signers as PEM, DER, JWK, or `did:key` P-256) |
+| `vaid-delegation` | A VAID delegation chain (Ed25519 kernel-signed) | `{leaf, chain, trust_config, requested_action?, now?}` + an injected `VaidRevocationSource` (protocol; `InMemoryRevocationList` is one implementation) | the upstream `vaid-a2a` verifier's full ordered check (signature, leaf expiry, `scope_boundary` readability, chain integrity/attenuation, requested-action scope, revocation) allows the request | forged signature, scope escalation, expired, unknown `scope_boundary` kind, issuer/trust-domain mismatch, revoked link → FAILED; no revocation source configured, or revocation genuinely indeterminate → NOT_VERIFIED | **consumes the upstream `vaid-a2a` PyPI package** (`vaid_a2a.verify_a2a_message`, which itself consumes `vaid-mint`); thin adapter, never forked |
 
 ## The proof block
 
@@ -47,6 +48,118 @@ class ProofResult(BaseModel):
 `ProofResult` is the typed value of `SmAgentFacts.proof`. A pre-v0.4 opaque `proof` dict is
 accepted for back-compat but downgraded to `NOT_VERIFIED(legacy-unverified)` — a legacy
 payload can never masquerade as verified.
+
+## `vaid-delegation`: VAID delegation chains
+
+`VaidDelegationProfile` (`sm_bridge.trust.vaid_delegation`) verifies a VAID delegation
+chain carried under the VAID A2A extension
+(https://github.com/solara-associates/vaid/blob/main/docs/a2a/v1/extension.md). It
+requires the `[vaid]` extra (`pip install 'sm-bridge[vaid]'`), which pulls in `vaid-a2a`
+and, transitively, `vaid-mint`.
+
+```python
+from vaid_mint.revocation import InMemoryRevocationList
+
+from sm_bridge.trust.vaid_delegation import VaidDelegationProfile
+
+# A durable VaidRevocationSource belongs here in production; InMemoryRevocationList is
+# for tests and local development, and is one implementation of that seam, not the
+# contract itself (below).
+revocation = InMemoryRevocationList.assume_nothing_revoked()
+profile = VaidDelegationProfile(revocation=revocation)
+
+evidence = {
+    "leaf": leaf_vaid_document,
+    "chain": ancestor_vaid_documents,
+    "trust_config": {"trustedIssuers": [{"trustDomain": "vaid.example", "kernelPublicKey": "..."}]},
+    "requested_action": "data.acme.orders",
+    "now": "2026-07-01T00:00:00Z",
+}
+result = await profile.verify(None, evidence)
+```
+
+The adapter does not reimplement signature, attenuation or revocation checking: it
+builds the A2A `Message` metadata shape `vaid_a2a.verify_a2a_message` expects and
+normalizes its `VerifyResult` into a `ProofResult`.
+
+### The revocation seam is a protocol, not a concrete list type
+
+`VaidDelegationProfile.__init__` takes `revocation: VaidRevocationSource | None`, a
+`typing.Protocol` defined in `sm_bridge.trust.vaid_delegation`:
+
+```python
+class VaidRevocationSource(Protocol):
+    def check_lineage(self, lineage: list[str]) -> RevocationStatus: ...
+```
+
+Any object shaped like that satisfies it -- `InMemoryRevocationList` is one
+implementation, not the contract. A durable backend (a database-backed revocation list,
+a call out to a revocation service) drops in by implementing the same one method, with
+no change to this profile:
+
+```python
+from vaid_mint.revocation import RevocationStatus
+
+from sm_bridge.trust.vaid_delegation import VaidDelegationProfile
+
+class MyDurableRevocationStore:
+    """Implements VaidRevocationSource against our own revocation table."""
+
+    def check_lineage(self, lineage: list[str]) -> RevocationStatus:
+        if not self._table_is_reachable():
+            return RevocationStatus.UNAVAILABLE  # fails closed, never guesses clean
+        return (
+            RevocationStatus.REVOKED
+            if self._table_has_any(lineage)
+            else RevocationStatus.NOT_REVOKED
+        )
+
+profile = VaidDelegationProfile(revocation=MyDurableRevocationStore())
+```
+
+This mirrors `vaid_mint.revocation.RevocationCheck` on purpose, including its
+three-state return. A boolean `is_revoked(lineage) -> bool` seam was considered and
+rejected: `RevocationStatus.UNAVAILABLE` ("the store could not be consulted") is a
+distinct, fail-closed answer, not a synonym for "checked, and clean" -- a boolean shape
+cannot say which one happened, and collapsing them is exactly the silent-pass failure
+mode this package's honesty contract exists to prevent.
+
+The revocation seam is injected at construction, never read from evidence and never read
+from any config source (env vars, files, settings) -- a caller wires it once, matching
+how `vaid_a2a.verify_a2a_message` itself requires the seam to be wired: the check only
+answers about a lineage it is handed, it never resolves or looks one up. If no
+`VaidRevocationSource` is configured, `verify` returns `NOT_VERIFIED` every time,
+regardless of how clean the rest of the chain is. A configured-but-empty store
+(`InMemoryRevocationList()` / `.unavailable()`) is also `NOT_VERIFIED`, distinct from a
+configured store that vouches for an empty revoked set
+(`InMemoryRevocationList.assume_nothing_revoked()`), which can reach `VERIFIED`.
+
+### What VAID proves that AgentFacts does not
+
+An AgentFacts record is a self-asserted description of an agent. Nothing in the record
+itself is cryptographically tied to whatever authority was supposed to have granted the
+agent its capabilities; a registry that accepts AgentFacts at face value is trusting the
+agent's own say-so. A VAID delegation chain is a signed lineage: every hop is a
+credential issued by an identified kernel key, scoped and time-bounded, and every child's
+scope, capabilities, tenant and validity window is checked to sit strictly inside its
+parent's. Verifying a VAID chain proves not just "this agent claims capability X" but "an
+identified authority granted X, and every re-delegation down to this agent only narrowed
+it, never widened it." AgentFacts has no equivalent of that lineage check, and nothing in
+it distinguishes an agent that was properly delegated authority from one that simply
+wrote the claim into its own record.
+
+### CLI
+
+```sh
+sm-bridge verify vaid --evidence vaid-evidence.json [--revocation-list revoked-ids.json]
+```
+
+Exit codes match every other profile: 0 VERIFIED, 1 FAILED, 2 NOT_VERIFIED. Omitting both
+`--revocation-list` and an `evidence.revoked_vaid_ids` key leaves the revocation source
+unconfigured, so the command always reports NOT_VERIFIED rather than a silent pass.
+
+A runnable, fully offline example (no network, no package server) is in
+`examples/demo4_vaid_delegation.py`.
 
 ## Adding a source
 
