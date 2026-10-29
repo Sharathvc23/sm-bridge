@@ -201,3 +201,79 @@ class TestCardIdentifier:
         card = TestClient(app).get("/cards/planner.json").json()
 
         assert card["_meta"]["identifier"] == "urn:air:example.com:agent:planner"
+
+
+class TestListingPredicate:
+    """`is_listed` — a registry's own rule for who may be enumerated.
+
+    Orrery hand-wrote its entire Index-facing surface because this library could not
+    express consent gating, and then had to keep its index, delta feed and re-seed
+    agreeing by hand. The predicate exists so the next registry in that position can
+    use the library instead.
+    """
+
+    @staticmethod
+    def _store() -> DeltaStore:
+        store = DeltaStore()
+        store.add("upsert", _facts("consented"))
+        store.add("upsert", _facts("withheld"))
+        return store
+
+    @staticmethod
+    def _listed_client(store: DeltaStore) -> TestClient:
+        app = FastAPI()
+        app.include_router(
+            create_gateway_router(
+                store,
+                base_url=BASE_URL,
+                domain=DOMAIN,
+                is_listed=lambda slug, _facts: slug != "withheld",
+            )
+        )
+        return TestClient(app)
+
+    def test_the_catalog_omits_an_unlisted_agent(self) -> None:
+        body = self._listed_client(self._store()).get("/.well-known/ai-catalog.json").json()
+        assert [e["identifier"] for e in body["entries"]] == ["consented"]
+
+    def test_the_index_fanout_omits_an_unlisted_agent(self) -> None:
+        body = self._listed_client(self._store()).get("/agents/search").json()
+        assert [e["identifier"] for e in body["entries"]] == ["consented"]
+
+    def test_both_enumerating_surfaces_agree(self) -> None:
+        # The property that matters: a registry must not publish two different
+        # claims about who it lists.
+        client = self._listed_client(self._store())
+        catalog = {e["identifier"] for e in client.get("/.well-known/ai-catalog.json").json()["entries"]}
+        searched = {e["identifier"] for e in client.get("/agents/search").json()["entries"]}
+        assert catalog == searched
+
+    def test_an_unlisted_agent_is_still_resolvable_by_name(self) -> None:
+        # Deliberate, and the boundary is pinned rather than left to be discovered.
+        # A 403 would disclose the agent while refusing it; a 404 would be a positive
+        # claim of absence about an agent this registry holds — which a corroborator
+        # reads as a false omission — and the Index's own resolution hop for a
+        # legitimately registered entry comes through this path.
+        client = self._listed_client(self._store())
+        assert client.get("/agents/withheld").status_code == 200
+        assert client.get("/cards/withheld.json").status_code == 200
+
+    def test_no_predicate_lists_everything(self) -> None:
+        # The default must be the pre-existing behaviour, or this is a breaking change.
+        body = _client(self._store()).get("/.well-known/ai-catalog.json").json()
+        assert {e["identifier"] for e in body["entries"]} == {"consented", "withheld"}
+
+    def test_the_predicate_sees_the_facts_not_only_the_slug(self) -> None:
+        # A real consent rule reads the record, not just its name.
+        store = DeltaStore()
+        store.add("upsert", _facts("planner"))
+        app = FastAPI()
+        app.include_router(
+            create_gateway_router(
+                store,
+                base_url=BASE_URL,
+                domain=DOMAIN,
+                is_listed=lambda _slug, facts: facts.agent_name != "Agent planner",
+            )
+        )
+        assert TestClient(app).get("/agents/search").json()["entries"] == []
