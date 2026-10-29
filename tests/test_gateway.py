@@ -79,7 +79,9 @@ def test_a2a_card_leaf_points_at_runtime_and_carries_agentfacts() -> None:
     card = res.json()
     assert card["url"] == RUNTIME
     assert card["authentication"]["schemes"] == ["ed25519"]
-    assert card["_meta"]["identifier"] == f"urn:ai:domain:{DOMAIN}:agent:planner"
+    # An AIR URN. This asserted `urn:ai:domain:...` until that form turned out to
+    # be one the Index refuses; see tests/test_index_fanout.py.
+    assert card["_meta"]["identifier"] == f"urn:air:{DOMAIN}:agent:planner"
     # native facts ride along on the same response
     assert card["_meta"]["agentfacts"]["agent_name"] == "Agent planner"
 

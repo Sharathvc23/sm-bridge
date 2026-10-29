@@ -4,8 +4,16 @@ AI Catalog gateway.
 Serves the AI Catalog discovery endpoints for the agents in a ``DeltaStore``::
 
     GET /.well-known/ai-catalog.json   -> CatalogDocument
+    GET /agents/search?q=<query>       -> CatalogDocument (the Index's fan-out hop)
     GET /agents/{slug}                 -> CatalogEntry
     GET /cards/{slug}.json             -> A2A AgentCard
+
+``/agents/search`` is the one path the NANDA Index fetches from a registrant. An
+entry whose ``media_type`` is the enterprise catalog type is expanded by the Index
+at query time with ``GET <registry_url>/agents/search?q=...``; a registry that does
+not answer it is recorded as unreachable and contributes nothing to the Index's
+search, however complete its catalog. ``registry_url`` is this gateway's
+``base_url``.
 
 Each ``SmAgentFacts`` record is translated into a ``CatalogEntry`` (a pointer to
 the agent's card) and an A2A ``AgentCard`` whose ``url`` is the agent's runtime.
@@ -30,7 +38,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from .models import SmAgentFacts
@@ -104,6 +112,20 @@ def current_facts(
     return state
 
 
+def _matches(entry: CatalogEntry, query: str) -> bool:
+    """Whether `entry` satisfies a free-text catalog query.
+
+    Only fields the entry actually carries are searched, so a match can always be
+    explained by something the source declared. An empty query matches everything:
+    the caller asked to narrow by nothing.
+    """
+    q = query.strip().lower()
+    if not q:
+        return True
+    haystack = [entry.displayName, entry.description or "", entry.identifier, *entry.tags]
+    return any(q in field.lower() for field in haystack)
+
+
 # ── translators: SmAgentFacts -> AI-Catalog / A2A card ──
 def to_catalog_entry(facts: SmAgentFacts, slug: str, base_url: str) -> CatalogEntry:
     return CatalogEntry(
@@ -153,7 +175,13 @@ def to_a2a_card(facts: SmAgentFacts, slug: str, domain: str, base_url: str) -> A
         skills=[{"name": s.id, "description": s.description} for s in facts.skills],
         provider={"organization": facts.provider.name, "url": facts.provider.url},
         meta={
-            "identifier": f"urn:ai:domain:{domain}:agent:{slug}",
+            # An ARD domain-anchored resource identifier (AIR URN), the form the
+            # NANDA Index keys entries on. The previous `urn:ai:domain:<domain>:...`
+            # is refused by the Index outright, so a card carrying it named this
+            # agent with a string nothing upstream would accept. The publisher
+            # domain is lower-cased because the Index normalises it that way and an
+            # identifier that differs only in case is a different string here.
+            "identifier": f"urn:air:{domain.lower()}:agent:{slug}",
             "publicUrl": f"{base_url}/cards/{slug}.json",
             "hostedBy": "sm-bridge",
             # full AgentFacts, for clients that want more than the card
@@ -194,6 +222,27 @@ def create_gateway_router(
             host=base,
             entries=[to_catalog_entry(f, slug, base) for slug, f in agents.items()],
         )
+
+    # MUST be registered before `/agents/{slug}`: FastAPI matches in registration
+    # order, so the parameterised route would otherwise capture "search" as a slug
+    # and answer the Index's fan-out with a 404 for an agent of that name.
+    @router.get("/agents/search", response_model=CatalogDocument)
+    def search_agents(q: str = Query("", description="Free-text query")) -> CatalogDocument:
+        """The NANDA Index's fan-out hop — `GET <registry_url>/agents/search?q=...`.
+
+        Returns the same entries as `/.well-known/ai-catalog.json`, narrowed to those
+        matching `q`. The Index reads `entries` and takes a bounded slice, so this
+        answers with the whole catalog shape rather than a bespoke result envelope.
+
+        Matching is a case-insensitive substring over the fields an entry actually
+        declares — name, description, tags and identifier. It is deliberately not a
+        relevance ranking: the Index ranks across registries itself, and a score
+        invented here would compete with that while meaning something different for
+        every registry.
+        """
+        agents = current_facts(delta_store, slug_fn)
+        entries = [to_catalog_entry(f, slug, base) for slug, f in agents.items()]
+        return CatalogDocument(host=base, entries=[e for e in entries if _matches(e, q)])
 
     @router.get("/agents/{slug}", response_model=CatalogEntry)
     def get_agent(slug: str) -> CatalogEntry:
