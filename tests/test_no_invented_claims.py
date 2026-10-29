@@ -50,26 +50,38 @@ def test_a_declared_certification_is_kept() -> None:
 # ── skills ───────────────────────────────────────────────────
 
 
-def test_a_placeholder_skill_is_marked_as_synthesized() -> None:
+def test_a_placeholder_skill_is_marked_as_invented() -> None:
     # NANDA requires minItems:1, so a source with no skills cannot be represented
     # without one. The placeholder stays, but it must be distinguishable from a
     # skill the source actually declared.
     facts = _converter().to_sm(_agent())
     assert len(facts.skills) == 1
-    assert facts.metadata[EXT]["synthesized"] == ["skills"]
+    assert "skills" in facts.metadata[EXT]["provenance"]["invented"]
 
 
-def test_declared_skills_are_not_marked_synthesized() -> None:
+def test_declared_skills_are_not_marked_invented() -> None:
     facts = _converter().to_sm(_agent(skills=[{"id": "summarize", "description": "Summarize"}]))
     assert facts.skills[0].id == "summarize"
-    assert facts.metadata[EXT]["synthesized"] == []
+    assert "skills" not in facts.metadata[EXT]["provenance"]["invented"]
 
 
-def test_a_source_cannot_shadow_the_synthesized_marker() -> None:
-    # The marker is this bridge's statement about its own output. A source that
-    # supplies its own `synthesized` key must not be able to hide the fact.
-    facts = _converter().to_sm(_agent(metadata={"synthesized": []}))
-    assert facts.metadata[EXT]["synthesized"] == ["skills"]
+def test_the_deprecated_synthesized_alias_is_gone() -> None:
+    # Deprecated in 0.8.0 in favour of `provenance.invented`, which carries the
+    # same fact for more than one field. Kept one release, removed in 0.9.0 as
+    # that note said it would be.
+    facts = _converter().to_sm(_agent())
+    assert "synthesized" not in facts.metadata[EXT]
+
+
+def test_a_source_cannot_reoccupy_the_removed_synthesized_field() -> None:
+    # The field was this bridge's own marker. Having removed it, we must also
+    # keep the source out of it: the source's metadata is spread into the same
+    # block, so a supplied `synthesized` would land where our marker used to be
+    # and a consumer still reading the 0.7.0 field would read a source-controlled
+    # value believing it was ours. Absent beats plausible.
+    facts = _converter().to_sm(_agent(metadata={"synthesized": ["lies"]}))
+    assert "synthesized" not in facts.metadata[EXT]
+    assert "skills" in facts.metadata[EXT]["provenance"]["invented"]
 
 
 # ── conformance level ────────────────────────────────────────
