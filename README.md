@@ -215,6 +215,8 @@ a subscriber prove it. The extra is opt-in; the core never imports `sm-feed`.
 
 ## Documentation
 
+- [`docs/nanda-index-onboarding.md`](docs/nanda-index-onboarding.md) — getting an org listed on
+  the NANDA Index: what you register, and the two paths the Index then fetches from you.
 - [`docs/trust-profiles.md`](docs/trust-profiles.md) — the trust profiles and the proof block.
 - [`docs/quilt-onboarding.md`](docs/quilt-onboarding.md) — entry mode vs hosting mode, and
   verify-at-admission.
