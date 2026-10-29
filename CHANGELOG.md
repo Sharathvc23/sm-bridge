@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **[`docs/nanda-index-onboarding.md`](docs/nanda-index-onboarding.md)** — the end-to-end
+  path for getting an org listed on the NANDA Index: the `hosting_path` → media-type →
+  routing table, what `registry_url` must point at, how the AIR URN identifier is derived
+  (and the two older forms the Index refuses), the two paths the Index fetches from a
+  registrant, and the `match: "publisher"` trap that makes a `200` from the Index's resolve
+  not a claim about the agent you asked for.
+
+  Written because the library serves the Index but never said what the Index expects, so
+  the information lived in whichever consumer had most recently been broken by it. It also
+  states plainly that **the bridge serves and does not register** — registration needs an
+  account, a role and a DNS challenge, none of which belong in a registry library.
+
 ### Added
 
 - **`GET /agents/search?q=...` on the AI-Catalog gateway — the NANDA Index's fan-out
