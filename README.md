@@ -191,7 +191,9 @@ carry a `ProofResult`.
 
 - **Delta store** — `DeltaStore` tracks upserts/deletes with a monotonic cursor for
   registry-to-registry synchronization; subclass `PersistentDeltaStore` to back it with a
-  database. The default HTTP sync transport is the `[federation]` extra.
+  database. The default HTTP sync transport is the `[federation]` extra. Peer feeds
+  with inclusive cursors can explicitly select `cursor_mode="inclusive"`; see
+  [delta cursor compatibility and recovery limits](docs/delta-cursors.md).
 - **AI-Catalog gateway** — `create_gateway_router(delta_store, base_url=..., domain=...)`
   serves `/.well-known/ai-catalog.json`, `/agents/{slug}`, and A2A `/cards/{slug}.json`
   alongside the `/nanda/*` router.

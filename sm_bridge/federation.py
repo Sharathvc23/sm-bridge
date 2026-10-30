@@ -22,7 +22,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .models import SmAgentFacts
 from .store import DeltaStore
@@ -32,6 +32,7 @@ Fetch = Callable[[str], dict[str, Any]]
 # A caller-supplied local re-verifier: given the inbound agent + its raw delta, return a
 # ProofResult this registry actually computed (or None to fall through to the safe default).
 Reverify = Callable[[SmAgentFacts, dict[str, Any]], "ProofResult | None"]
+CursorMode = Literal["exclusive", "inclusive"]
 
 
 def _resolve_inbound_proof(
@@ -97,13 +98,19 @@ def pull_deltas(
     timeout: float = 10.0,
     reverify: Reverify | None = None,
     trust_peer_proof: bool = False,
+    cursor_mode: CursorMode = "exclusive",
 ) -> PullResult:
     """Pull a peer's deltas since ``since`` and apply them into ``store``.
 
     Args:
         peer_url: base URL of the peer registry (its ``/nanda/deltas`` is appended).
         store: local DeltaStore to apply the peer's changes into.
-        since: peer sequence cursor — only deltas with ``seq > since`` are returned.
+        since: peer sequence cursor; its meaning is selected by ``cursor_mode``.
+        cursor_mode: ``exclusive`` (default) requests ``seq > since`` and returns
+            the last received sequence. ``inclusive`` requests ``seq >= since``
+            and requires ``next_seq`` to equal the last received sequence plus
+            one, or the unchanged input cursor for an empty page. Select this
+            from the peer's documented contract; never infer it from one page.
         fetch: transport ``(url) -> json dict``; defaults to an httpx GET.
         timeout: request timeout for the default transport.
         reverify: optional local re-verifier ``(agent, delta) -> ProofResult | None``.
@@ -114,23 +121,47 @@ def pull_deltas(
             is never laundered into this registry. Only enable for a peer you fully trust.
 
     Returns:
-        :class:`PullResult` with the number applied and the new cursor (the highest
-        peer ``seq`` seen, or ``since`` unchanged when nothing was returned).
+        :class:`PullResult` with the number applied and the new cursor, suitable
+        for the next call using the same mode. A short page is not necessarily
+        the end of the feed. Page validation and local re-verification finish
+        before any writes. Store writes are not atomic: a store failure can leave
+        a partial page applied, and durable recovery needs a transactional sink.
     """
+    if type(since) is not int or since < 0:
+        raise ValueError("since must be a nonnegative integer")
+    if cursor_mode not in ("exclusive", "inclusive"):
+        raise ValueError("unsupported cursor mode")
     do_fetch = fetch or _httpx_fetch(timeout)
     url = f"{peer_url.rstrip('/')}/nanda/deltas?since={since}"
     data = do_fetch(url)
 
+    if not isinstance(data, dict) or not isinstance(data.get("deltas"), list):
+        raise ValueError("invalid delta page")
     cursor = since
-    applied = 0
-    for delta in data.get("deltas", []):
+    previous = since if cursor_mode == "exclusive" else since - 1
+    prepared: list[tuple[dict[str, Any], SmAgentFacts]] = []
+    for delta in data["deltas"]:
+        if not isinstance(delta, dict):
+            raise ValueError("invalid delta row")
+        seq = delta.get("seq")
+        if type(seq) is not int or seq <= previous:
+            raise ValueError("delta sequences must increase within the requested range")
+        if delta.get("action") not in ("upsert", "delete", "revoke"):
+            raise ValueError("invalid delta action")
         agent = SmAgentFacts.model_validate(delta["agent"])
+        prepared.append((delta, agent))
+        previous = seq
+        cursor = seq + 1 if cursor_mode == "inclusive" else seq
+    if cursor_mode == "inclusive":
+        next_seq = data.get("next_seq")
+        if type(next_seq) is not int or next_seq != cursor:
+            raise ValueError("next_seq does not match the returned page")
+    for delta, agent in prepared:
         # Never re-serve a peer's proof claim as our own verification.
         agent.proof = _resolve_inbound_proof(agent, delta, reverify, trust_peer_proof)
-        store.add(str(delta["action"]), agent)
-        cursor = max(cursor, int(delta["seq"]))
-        applied += 1
-    return PullResult(applied=applied, cursor=cursor)
+    for delta, agent in prepared:
+        store.add(delta["action"], agent)
+    return PullResult(applied=len(prepared), cursor=cursor)
 
 
 class FederationPoller:
@@ -157,6 +188,7 @@ class FederationPoller:
         fetch: Fetch | None = None,
         reverify: Reverify | None = None,
         trust_peer_proof: bool = False,
+        cursor_mode: CursorMode = "exclusive",
     ) -> None:
         self.peer_url = peer_url
         self.store = store
@@ -165,6 +197,7 @@ class FederationPoller:
         self._fetch = fetch
         self._reverify = reverify
         self._trust_peer_proof = trust_peer_proof
+        self._cursor_mode = cursor_mode
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -177,6 +210,7 @@ class FederationPoller:
             fetch=self._fetch,
             reverify=self._reverify,
             trust_peer_proof=self._trust_peer_proof,
+            cursor_mode=self._cursor_mode,
         )
         self.since = result.cursor
         return result
