@@ -9,6 +9,7 @@ and it prints an honest verdict.
     sm-bridge verify agent-card  --card card.json --signature-b64 <b64> --pubkey key.pem
     sm-bridge verify dns-aid     --fqdn agent.example.com [--dane]
     sm-bridge verify delegation  --evidence delegation-bundle.json
+    sm-bridge verify vaid        --evidence vaid-evidence.json
 
 Exit code: 0 = VERIFIED, 1 = FAILED, 2 = NOT_VERIFIED, 64 = usage error. The verification
 adapters live in the ``[trust]`` extra; install with ``pip install 'sm-bridge[trust]'``.
@@ -119,6 +120,27 @@ def _verify_delegation(args: argparse.Namespace) -> int:
     return _report(_run(NandaDelegationProfile().verify(None, evidence)))
 
 
+def _verify_vaid(args: argparse.Namespace) -> int:
+    from sm_bridge.trust.vaid_delegation import VaidDelegationProfile
+
+    try:
+        from vaid_mint.revocation import InMemoryRevocationList
+    except ImportError:
+        return _die("the vaid profile needs the [vaid] extra: pip install 'sm-bridge[vaid]'")
+
+    evidence = json.loads(Path(args.evidence).read_text())
+    revoked_ids = evidence.pop("revoked_vaid_ids", None)
+    if args.revocation_list:
+        revoked_ids = json.loads(Path(args.revocation_list).read_text())
+    revocation = InMemoryRevocationList()
+    if revoked_ids is not None:
+        for vaid_id in revoked_ids:
+            revocation.revoke(vaid_id)
+        if not revoked_ids:
+            revocation = InMemoryRevocationList.assume_nothing_revoked()
+    return _report(_run(VaidDelegationProfile(revocation=revocation).verify(None, evidence)))
+
+
 # ----- parser ------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -155,6 +177,15 @@ def _build_parser() -> argparse.ArgumentParser:
     g = vsub.add_parser("delegation", help="verify a did:key delegation chain")
     g.add_argument("--evidence", required=True, help="path to the delegation evidence bundle (JSON)")
     g.set_defaults(func=_verify_delegation)
+
+    v = vsub.add_parser("vaid", help="verify a VAID delegation chain (A2A extension)")
+    v.add_argument("--evidence", required=True, help="path to the VAID evidence bundle (JSON)")
+    v.add_argument(
+        "--revocation-list",
+        help="path to a JSON array of revoked vaid_ids; overrides evidence.revoked_vaid_ids. "
+        "Omitting both leaves the revocation source unconfigured -> NOT_VERIFIED.",
+    )
+    v.set_defaults(func=_verify_vaid)
 
     return p
 
