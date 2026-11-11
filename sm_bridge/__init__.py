@@ -43,6 +43,8 @@ from .converter import AbstractAgentConverter, AgentConverter, SimpleAgent, Simp
 from .federation import FederationPoller, PullResult, pull_deltas
 from .gateway import (
     A2AAgentCard,
+    A2AAgentInterface,
+    A2AAgentSkill,
     CatalogDocument,
     CatalogEntry,
     create_gateway_router,
@@ -135,6 +137,8 @@ __all__ = [
     "CatalogEntry",
     "CatalogDocument",
     "A2AAgentCard",
+    "A2AAgentInterface",
+    "A2AAgentSkill",
     # Federation sync client
     "pull_deltas",
     "PullResult",

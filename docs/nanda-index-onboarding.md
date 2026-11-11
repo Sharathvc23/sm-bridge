@@ -111,6 +111,21 @@ A resolver that found your `registry_url` in the Index walks it: your catalog en
 then the A2A card at `CatalogEntry.url`. The gateway serves both, plus
 `/.well-known/ai-catalog.json` for consumers that want the whole catalog.
 
+The card is an **A2A v1.0** AgentCard, which is what the Index's card check
+(`server/src/services/cardValidation.ts`) requires: nonempty `name`, `description` and
+`version`; a nonempty `supportedInterfaces` whose entries carry `url`, `protocolBinding`
+and `protocolVersion` (the legacy top-level `url` is kept too — the Index falls back to
+it only when `supportedInterfaces` is absent); an object `capabilities`; nonempty
+`defaultInputModes` / `defaultOutputModes`; and skills each with `id`, `name`,
+`description` and `tags`. Authentication is `securitySchemes` + `securityRequirements`,
+derived from the facts' `capabilities.authentication.methods`. Until 0.11.0 the gateway
+emitted an A2A v0.2-era card (`url` only, `authentication: {schemes}`, no modes, skills
+without `id`/`tags`) and the Index rejected it.
+
+`CatalogEntry.updatedAt` is the time the entry was serialized, not the time the agent's
+record last changed — the facts carry no modification time and the gateway does not
+invent one. The delta log's `recorded_at` is the real event time.
+
 ## 3. What arrives when someone resolves you
 
 The Index's `/api/v1/resolve?locator=<air-urn>` returns `{locator, identifier, match,
