@@ -1,5 +1,112 @@
 # Changelog
 
+## [0.11.0] — 2026-11-11
+
+### Changed — BREAKING
+
+- **The A2A card at `/cards/{slug}.json` is an A2A v1.0 AgentCard.** It was an A2A
+  v0.2-era document — a top-level `url` only, an `authentication: {schemes}` block the
+  protocol removed in v0.3, no `defaultInputModes`/`defaultOutputModes`, skills with
+  neither `id` nor `tags`, and no protocol version — and the NANDA Index v2's card check
+  (`server/src/services/cardValidation.ts`) rejected it on every one of those points. The
+  card now carries `protocolVersion: "1.0"`, `supportedInterfaces: [{url, protocolBinding:
+  "JSONRPC", protocolVersion: "1.0"}]`, `securitySchemes` + `securityRequirements` derived
+  from `capabilities.authentication.methods` (methods with a lossless A2A rendering get
+  it; others are carried verbatim; `none` yields nothing), `defaultInputModes` /
+  `defaultOutputModes` (the union of the skills' modes rendered as media types, falling
+  back to `text/plain`), and skills each with `id`, `name` (the source's `name` extra or
+  the id), `description`, non-empty `tags` (`capabilities.skills` or `general`),
+  `inputModes` and `outputModes`. The legacy top-level `url` is kept for pre-v1.0 readers
+  (the Index falls back to it only when `supportedInterfaces` is absent), and `_meta` is
+  unchanged. `A2AAgentCard.model_dump()` / `model_dump_json()` emit `_meta` under its
+  wire name by default, so a hand-rolled dump is the document the router serves.
+  **Migration:** readers of `card["authentication"]["schemes"]` should read
+  `card["securitySchemes"]` / `card["securityRequirements"]`; readers of
+  `card["skills"][i]["name"]` now get the display name and should read `["id"]` for the
+  identifier. A test runs a Python rendering of the Index's own check against the card.
+
+- **`ans-txt` returns `VERIFIED` only from DNSSEC-validated answers.** It returned
+  `VERIFIED` from a plain TXT lookup, which proves nothing about who controls the zone
+  and contradicted the README's "every VERIFIED is a real signature, DNS, or Merkle
+  check". The resolver seam now reports `DnsAnswer(records, authenticated)`; the default
+  dnspython resolver requests DNSSEC (EDNS DO + AD) and reports the response's AD bit.
+  Every load-bearing record (`_ans`, `_ans-badge`, at every vantage) must be
+  authenticated, else the verdict is `NOT_VERIFIED` with reason `dnssec_not_validated`
+  naming what was not. A resolver returning a bare `list[str]` is still accepted and
+  treated as unauthenticated, so a seam that says nothing about DNSSEC can never produce
+  a pass. Split-horizon and expected-url mismatch stay `FAILED`, decided before the gate.
+  **Migration:** a deployment whose resolver does not validate DNSSEC will now see
+  `NOT_VERIFIED` where it saw `VERIFIED`; that is the honest verdict for what it checked.
+
+- **`nanda-delegation` uses the verifier's clock and revocation view.** The profile read
+  `now` and `status_tokens` from the evidence bundle — the thing the subject under
+  verification hands over — so a revoked or expired delegate could assert `ACTIVE`, pick
+  the instant it was judged at, and be `VERIFIED`. `now` is now the verifier's UTC wall
+  clock; an evidence-supplied `now` is ignored unless the profile is built with
+  `trust_evidence_clock=True`, which is **test-only** (it pins offline fixtures) and
+  defaults off. Evidence-supplied `status_tokens` are the subject's claim and are
+  ignored; rule 5 is checked against a verifier-side `status_source`
+  (`delegationId -> token | None`, sync or async) passed to
+  `NandaDelegationProfile(status_source=...)`. Without one, a chain that passes every
+  other check is `NOT_VERIFIED (status_unverified)`. Structural violations stay `FAILED`
+  regardless. `sm-bridge verify delegation` gains `--status-source <json>` and
+  `--trust-evidence-clock`; without a status source it exits `2`.
+  **Migration:** pass your revocation view as `status_source`; drop `now` and
+  `status_tokens` from bundles you produce (they are ignored).
+
+- **A `VERIFIED` must name a registered verification method.** `ProofResult.verified()`
+  accepted any non-empty strings, so the honesty invariant guarded only against a missing
+  `evidence_ref`. The in-tree methods are pre-registered in core; a third-party profile
+  calls `sm_bridge.trust.base.register_verification_method()` once. `FAILED` and
+  `NOT_VERIFIED` are unrestricted. An inbound record claiming `VERIFIED` via a method this
+  registry does not implement is downgraded on parse to `NOT_VERIFIED
+  (unregistered-method)` rather than rejected (one record must not wedge a federation
+  pull) or kept (laundering). The `trust/base.py` docstring now says plainly that
+  construction is a shape check, not a guard that the check ran — that guarantee is each
+  profile's, pinned by its tests.
+
+- **The `integrity`, `governance`, `card` and `provenance` extras are gone, and `[all]`
+  installs.** All four named `sm-model-*` packages that are not on PyPI, and `[all]`
+  included them, so `pip install "sm-bridge[all]"` failed outright. `[all]` is now the
+  union of the published extras: federation, trust, tlog, feed. The `Python :: 3.10`
+  classifier is also removed; the package requires 3.11.
+
+### Added
+
+- **`cursor_mode="inclusive"` on `pull_deltas` and `FederationPoller`** (#30, unreleased
+  until now). A peer using inclusive `since` and `next_seq = last + 1` caused the
+  polling helper to replay its final entry forever. The exclusive default is unchanged;
+  inclusive pages must report exactly the derived cursor, including unchanged empty
+  pages, and both modes reject malformed or out-of-order rows and complete agent
+  validation and proof re-verification before any store write. See
+  [`docs/delta-cursors.md`](docs/delta-cursors.md) for the compatibility and recovery
+  limits (no atomic import, no durable cursor; a store error can partially apply a page).
+
+- **`FederationPoller.last_error`.** `_run` swallowed every exception with `pass`, so a
+  peer that was down or serving malformed pages looked like a catalog that had stopped
+  changing. A failed tick is now logged at `WARNING` under `sm_bridge.federation` with
+  the traceback and kept on `last_error` until a later tick succeeds. The loop still
+  retries.
+
+- `A2AAgentInterface` and `A2AAgentSkill` are exported from `sm_bridge`.
+
+### Fixed
+
+- `to_catalog_entry` and `to_a2a_card` strip a trailing slash from `base_url`, so a
+  `base_url` ending in `/` no longer yields `//cards/...` URLs.
+
+### Documentation
+
+- `CatalogEntry.updatedAt` is documented as the time the entry was **serialized**, not the
+  time the record last changed; the facts carry no modification time and the gateway does
+  not invent one (the delta log's `recorded_at` is the real event time).
+- The quilt invariant ("one entry per registry, never one per agent") is stated as what
+  it is: structural in entry mode, a **convention** in hosting mode. The README and
+  `docs/quilt-onboarding.md` said the types enforced it; the per-agent `AgentConverter`
+  seam cannot tell a catalog from a flattened registry.
+- `docs/nanda-index-onboarding.md` lists the card fields the Index checks and where that
+  rule text lives.
+
 ## [0.10.0] — 2026-10-29
 
 ### Added

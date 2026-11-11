@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sm-bridge"
-version = "0.10.0"
+version = "0.11.0"
 description = "A Python library for building NANDA-compatible AI agent registries"
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Framework :: FastAPI",
@@ -41,10 +40,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-integrity = ["sm-model-integrity-layer>=0.1.0"]
-governance = ["sm-model-governance>=0.1.0"]
-card = ["sm-model-card>=0.1.0"]
-provenance = ["sm-model-provenance>=0.1.0"]
 federation = ["httpx>=0.24.0"]
 # Trust-profile verification adapters (ed25519 agent-card, ANS/SCITT, DNS-AID, delegation).
 # Core never imports these — profiles import them lazily.
@@ -65,12 +60,15 @@ tlog = [
 feed = [
     "sm-feed>=0.2.0",
 ]
+# Every published runtime extra: federation + trust + tlog + feed. Until 0.11.0 this
+# listed four `sm-model-*` packages that are not on PyPI, so `pip install sm-bridge[all]`
+# failed outright; the same four had their own single-package extras, removed with it.
 all = [
-    "sm-model-integrity-layer>=0.1.0",
-    "sm-model-governance>=0.1.0",
-    "sm-model-card>=0.1.0",
-    "sm-model-provenance>=0.1.0",
     "httpx>=0.24.0",
+    "cryptography>=42.0.0",
+    "cbor2>=5.6.0",
+    "dnspython>=2.6.0",
+    "dns-aid>=0.26.0",
     "sm-feed>=0.2.0",
 ]
 dev = [
