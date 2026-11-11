@@ -9,12 +9,23 @@ This module is **core-safe**: it imports only pydantic + stdlib, never a `[trust
 Individual profiles under this package import cryptography/dnspython/cbor2 lazily and are
 only importable when the extra is installed — mirroring the repo's lazy-httpx pattern.
 
-Cryptographic honesty rule (enforced, not merely documented): a `ProofResult` may carry
+Cryptographic honesty rule (enforced at construction): a `ProofResult` may carry
 ``status == VERIFIED`` only when it also carries a non-empty ``evidence_ref`` describing
-the concrete artifact that was checked. `ProofResult.verified()` is the only blessed way to
-build a VERIFIED result and it raises if that invariant is violated, so a profile cannot
-emit a mocked pass. When verification cannot truly run (no live infra, unreachable DNS,
-absent key), a profile returns ``not_verified(reason)`` — never a fabricated VERIFIED.
+the concrete artifact that was checked **and** a ``method`` naming a registered
+verification method (see :func:`register_verification_method`). `ProofResult.verified()`
+is the blessed way to build a VERIFIED result and raises if either is violated. When
+verification cannot truly run (no live infra, unreachable DNS, absent key), a profile
+returns ``not_verified(reason)`` — never a fabricated VERIFIED.
+
+**What construction does and does not guard.** The invariant catches the mistakes a
+validator can see: a VERIFIED with no evidence, or one naming a method no profile here
+implements (a typo, a stub, a peer's vocabulary). It cannot tell whether the named check
+actually ran — any code that can call ``ProofResult.verified`` can also call
+``register_verification_method`` first. The guarantee that a VERIFIED means a real
+signature, DNS or Merkle check is made by the *profiles* (each builds its VERIFIED only
+after its check passed, and the tests under ``tests/test_trust_*.py`` pin that), not by
+this type. Read a ``ProofResult`` as a profile's statement, and trust it exactly as far
+as you trust the profile that produced it.
 """
 
 from __future__ import annotations
@@ -49,6 +60,45 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# The verification methods a VERIFIED result may name. Seeded with the methods the
+# in-tree profiles implement; a third-party profile registers its own before it
+# emits a VERIFIED. Kept here (core-safe) rather than in the profiles so the check
+# does not need the `[trust]` extra to run.
+_VERIFICATION_METHODS: set[str] = {
+    "ed25519-jcs",  # ed25519_agentcard
+    "scitt-cose-merkle",  # ans_scitt
+    "ans-txt-control",  # ans_txt
+    "dns-aid-dnssec",  # dns_aid
+    "dns-aid-dnssec+dane",  # dns_aid, when DANE/TLSA binding was requested and held
+    "es256-jws-catalog",  # jws_catalog
+    "delegation-chain",  # delegation
+}
+
+
+def register_verification_method(method: str) -> str:
+    """Register ``method`` as a name a VERIFIED ``ProofResult`` may carry.
+
+    A trust profile outside this package calls this once (at import time) with the
+    name of the concrete check it implements, before it emits a VERIFIED. Registration
+    is not an attestation — see the module docstring — it only makes the name known so
+    an unregistered string is rejected as a mistake rather than accepted as a check.
+    Returns ``method`` so it can be used inline: ``_METHOD = register_verification_method(...)``.
+    """
+    if not isinstance(method, str) or not method.strip():
+        raise ValueError("verification method must be a non-empty string")
+    _VERIFICATION_METHODS.add(method)
+    return method
+
+
+def verification_methods() -> frozenset[str]:
+    """The registered verification method names (a snapshot)."""
+    return frozenset(_VERIFICATION_METHODS)
+
+
+def is_registered_method(method: str) -> bool:
+    return method in _VERIFICATION_METHODS
+
+
 class ProofResult(BaseModel):
     """Normalized proof block — the one downstream vocabulary every profile produces.
 
@@ -79,6 +129,14 @@ class ProofResult(BaseModel):
                 "cryptographic honesty violation: ProofResult.status=VERIFIED requires a "
                 "non-empty evidence_ref (the artifact that was actually checked)"
             )
+        # ...and no VERIFIED naming a check nothing here implements.
+        if self.status is ProofStatus.VERIFIED and not is_registered_method(self.method):
+            raise ValueError(
+                "cryptographic honesty violation: ProofResult.status=VERIFIED names "
+                f"verification method {self.method!r}, which is not a registered method "
+                f"(registered: {sorted(_VERIFICATION_METHODS)}); call "
+                "register_verification_method() for a real check, never for a stub"
+            )
         if self.status is not ProofStatus.VERIFIED and self.failure_reason is None:
             # FAILED / NOT_VERIFIED must say why — silence is not allowed.
             raise ValueError(
@@ -90,7 +148,12 @@ class ProofResult(BaseModel):
 
     @classmethod
     def verified(cls, *, profile: str, method: str, evidence_ref: str) -> ProofResult:
-        """A real check passed. `evidence_ref` is mandatory and must be non-empty."""
+        """A real check passed. `evidence_ref` is mandatory and must be non-empty, and
+        `method` must be a registered verification method.
+
+        This is a constructor, not a guard: it checks the shape of the claim, not that
+        the check ran. See the module docstring.
+        """
         return cls(
             profile=profile,
             method=method,
@@ -184,4 +247,12 @@ class TrustRegistry:
         return await profile.verify(subject, evidence)
 
 
-__all__ = ["ProofStatus", "ProofResult", "TrustProfile", "TrustRegistry"]
+__all__ = [
+    "ProofStatus",
+    "ProofResult",
+    "TrustProfile",
+    "TrustRegistry",
+    "is_registered_method",
+    "register_verification_method",
+    "verification_methods",
+]

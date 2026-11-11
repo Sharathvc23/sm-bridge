@@ -19,6 +19,7 @@ client or to test without a network::
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ Fetch = Callable[[str], dict[str, Any]]
 # ProofResult this registry actually computed (or None to fall through to the safe default).
 Reverify = Callable[[SmAgentFacts, dict[str, Any]], "ProofResult | None"]
 CursorMode = Literal["exclusive", "inclusive"]
+
+_log = logging.getLogger(__name__)
 
 
 def _resolve_inbound_proof(
@@ -167,14 +170,19 @@ def pull_deltas(
 class FederationPoller:
     """Background poller that repeatedly :func:`pull_deltas` from one peer.
 
-    Thread-based and resilient — transient peer errors are swallowed so the loop
-    keeps running. The cursor advances across iterations.
+    Thread-based and resilient — a failed pull does not stop the loop; the next tick
+    retries. A failure is **not** silent: it is logged at WARNING (with the traceback)
+    under ``sm_bridge.federation`` and kept on :attr:`last_error` until a later pull
+    succeeds, so an operator can see that a peer has been unreachable, or has been
+    serving malformed pages, rather than discovering it from a stale catalog. The
+    cursor advances only on success.
 
     Usage::
 
         poller = FederationPoller("https://peer.example", store, interval=30.0)
         poller.start()
         ...
+        if poller.last_error is not None: ...   # the most recent failed tick
         poller.stop()
     """
 
@@ -200,6 +208,8 @@ class FederationPoller:
         self._cursor_mode = cursor_mode
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: The exception from the most recent failed tick, or ``None`` after a success.
+        self.last_error: BaseException | None = None
 
     def sync_once(self) -> PullResult:
         """Run a single pull and advance the cursor."""
@@ -227,9 +237,22 @@ class FederationPoller:
         while not self._stop.is_set():
             try:
                 self.sync_once()
-            except Exception:
-                # A poller must survive a flaky/unreachable peer; retry next tick.
-                pass
+            except Exception as exc:
+                # A poller must survive a flaky/unreachable peer and retry next tick —
+                # but it must say so. Silently passing here hid every failure mode a
+                # federation can have (DNS, TLS, 5xx, a malformed page) behind a
+                # catalog that simply stopped changing.
+                self.last_error = exc
+                _log.warning(
+                    "federation pull from %s (since=%s) failed; retrying in %.1fs: %s",
+                    self.peer_url,
+                    self.since,
+                    self.interval,
+                    exc,
+                    exc_info=exc,
+                )
+            else:
+                self.last_error = None
             self._stop.wait(self.interval)
 
     def stop(self, timeout: float | None = 5.0) -> None:

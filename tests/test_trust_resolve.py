@@ -8,6 +8,9 @@ from fastapi.testclient import TestClient
 from sm_bridge.converter import SimpleAgent, SimpleAgentConverter
 from sm_bridge.router import SmBridge
 from sm_bridge.trust import ProofResult, TrustRegistry
+from sm_bridge.trust.base import register_verification_method
+
+register_verification_method("stub")  # the fake profile below is visibly a stub
 
 
 class _EvidenceConverter(SimpleAgentConverter):

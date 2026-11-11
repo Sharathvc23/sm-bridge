@@ -10,7 +10,9 @@ sm-bridge lets any agent source — your own registry, an AI catalog, an ANS reg
 single domainless agent — join the [NANDA](https://projectnanda.org) Index through one small
 library, and emerge carrying a **normalized, cryptographically verifiable proof of trust**.
 The Index stays a *quilt of registries* (one entry per registry, never one per agent); the
-bridge is how you get onto it.
+bridge is how you get onto it. In **entry mode** that invariant is structural (the converter
+has no per-agent API); in **hosting mode** it is a convention you keep — see
+[`docs/quilt-onboarding.md`](docs/quilt-onboarding.md).
 
 The core is just FastAPI + Pydantic. Verification and transparency-log features live in
 optional extras, so you only pull cryptography when you use it.
@@ -36,15 +38,18 @@ Requires Python 3.11 or later. MIT licensed.
   is hosted locally.
 - **Verify** each source with a pluggable **trust profile** and normalize the result to one
   proof block: `VERIFIED` / `FAILED` / `NOT_VERIFIED`. Every `VERIFIED` is a real signature,
-  DNS, or Merkle check — absent live infrastructure you get an honest `NOT_VERIFIED(reason)`,
-  never a mocked pass.
+  DNSSEC-validated DNS, or Merkle check, made by the profile that emitted it — absent live
+  infrastructure you get an honest `NOT_VERIFIED(reason)`, never a mocked pass. (The type
+  enforces the shape of that claim; the profiles and their tests make it true. See
+  [`docs/trust-profiles.md`](docs/trust-profiles.md).)
 - **Serve** the NANDA discovery surfaces as drop-in FastAPI routers: `/nanda/index`,
   `/nanda/resolve`, `/nanda/deltas`, `/.well-known/nanda.json`, plus an AI-Catalog gateway.
 
 Trust profiles today: `ed25519-agentcard`, `ans-scitt` (ANS SCITT receipts),
-`ans-txt` (ANS DNS discovery), `dns-aid` (SVCB + DNSSEC + DANE), `jws-catalog` (signed
-AI-Catalog), and `nanda-delegation` (did:key delegation chains). See
-[`docs/trust-profiles.md`](docs/trust-profiles.md).
+`ans-txt` (ANS DNS discovery — `VERIFIED` only from DNSSEC-validated answers), `dns-aid`
+(SVCB + DNSSEC + DANE), `jws-catalog` (signed AI-Catalog), and `nanda-delegation` (did:key
+delegation chains, revocation checked against *your* status source, never the subject's).
+See [`docs/trust-profiles.md`](docs/trust-profiles.md).
 
 ## Install
 
@@ -52,6 +57,7 @@ AI-Catalog), and `nanda-delegation` (did:key delegation chains). See
 pip install sm-bridge                 # core: FastAPI routers, models, delta sync
 pip install "sm-bridge[trust]"        # + verification adapters (ed25519/SCITT/DNS-AID/JWS/delegation)
 pip install "sm-bridge[trust,tlog]"   # + RFC 6962 transparency log & conformance self-test
+pip install "sm-bridge[all]"          # everything: federation + trust + tlog + feed
 ```
 
 Requires Python 3.11+.
@@ -88,10 +94,13 @@ sm-bridge verify ans-scitt   --receipt receipt.cbor --root-keys root-keys.txt
 sm-bridge verify jws-catalog --catalog ai-catalog.json --signature sig.jws --jwks jwks.json
 sm-bridge verify agent-card  --card card.json --signature-b64 <b64> --pubkey key.pem
 sm-bridge verify dns-aid     --fqdn agent.example.com [--dane]
-sm-bridge verify delegation  --evidence delegation-bundle.json
+sm-bridge verify delegation  --evidence delegation-bundle.json --status-source status.json
 ```
 
-Exit code `0` = VERIFIED, `1` = FAILED, `2` = NOT_VERIFIED.
+Exit code `0` = VERIFIED, `1` = FAILED, `2` = NOT_VERIFIED. `--status-source` is *your*
+revocation view (`{delegationId: {status, exp}}`); without it a delegation chain is at best
+`NOT_VERIFIED (status_unverified)`, because status tokens inside the subject's bundle are
+the subject's own claim.
 
 ### Runnable demos
 
@@ -195,8 +204,11 @@ carry a `ProofResult`.
   with inclusive cursors can explicitly select `cursor_mode="inclusive"`; see
   [delta cursor compatibility and recovery limits](docs/delta-cursors.md).
 - **AI-Catalog gateway** — `create_gateway_router(delta_store, base_url=..., domain=...)`
-  serves `/.well-known/ai-catalog.json`, `/agents/{slug}`, and A2A `/cards/{slug}.json`
-  alongside the `/nanda/*` router.
+  serves `/.well-known/ai-catalog.json`, `/agents/search` (the Index's fan-out hop),
+  `/agents/{slug}`, and an **A2A v1.0** AgentCard at `/cards/{slug}.json` alongside the
+  `/nanda/*` router. The card carries what the NANDA Index v2 checks (`supportedInterfaces`,
+  `defaultInputModes`/`defaultOutputModes`, skills with `id`/`name`/`tags`, …); the
+  catalog entry's `updatedAt` is the time it was serialized, not a record-change time.
 
 ## Transparency log & conformance
 

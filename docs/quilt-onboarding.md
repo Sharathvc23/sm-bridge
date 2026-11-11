@@ -3,7 +3,10 @@
 The NANDA Index is the **switchboard**: a pointer-only quilt that stitches together many
 independent registries, never a database that swallows their agents. sm-bridge is the
 **onboarding tool** anyone uses to join the index. It onboards a source through one of two
-modes, deliberately different in *shape* so the quilt invariant is enforced structurally.
+modes, deliberately different in *shape*: in entry mode the quilt invariant is structural
+(there is no per-agent API to misuse); in hosting mode it is a **convention** — the
+`AgentConverter` seam is per-agent by design, and nothing in the types stops you pointing
+it at a source that has a registry of its own. Choose the mode by the decision table below.
 
 ## Verify at admission, delegate at resolution
 
@@ -32,12 +35,17 @@ The rule in one line: **never per-agent-flatten a source that has its own regist
 so would turn the quilt into a monolith and put you on the hook for 140K records you don't
 own.
 
-## Why entry mode can't cheat
+## Why entry mode can't cheat — and why hosting mode can
 
 `EntryModeConverter` has **no `list_agents` / `get_agent` / `to_sm`** — only `to_entry()` and
 `delegate(agent)`. There is no API on this path to enumerate or import a source's agents, so
-bulk import isn't merely disallowed, it's *unrepresentable*. The invariant is enforced by the
-type, not by a runtime check you could forget.
+on *this* path bulk import isn't merely disallowed, it's *unrepresentable*.
+
+That is the whole of what the types enforce. Hosting mode is the per-agent seam, and it will
+happily host 140K records if you feed it 140K records — the library cannot tell a catalog
+with no registry of its own from a registry you chose to flatten. Keeping registry-scale
+sources in entry mode is your decision, made once per source, and this page is the place
+it is written down.
 
 ```python
 from sm_bridge import ANSEntryConverter, SmBridge

@@ -27,10 +27,10 @@ result = await registry.verify("ed25519-agentcard", subject, evidence)
 |---|---|---|---|---|---|
 | `ed25519-agentcard` | The signing key of the agent card | `{payload, signature_b64, public_key}` | ed25519 signature over the JCS-canonical card verifies | tampered payload, wrong key → FAILED; missing key → NOT_VERIFIED | implements the NANDA Index agent-card signing contract (JCS canonicalization + ed25519) |
 | `ans-scitt` | An ANS transparency-log receipt | `{receipt, public_key}` | COSE_Sign1 ES256 verifies AND the RFC 9162 Merkle root reconstructs to the receipt's committed root | tampered payload/path, wrong key, detached payload, treeSize≤0 → FAILED | implements the ANS SCITT receipt contract (COSE_Sign1 + RFC 9162); guards degenerate treeSize-1 and producer-vs-issuer-key conflation |
-| `ans-txt` | ANS `_ans` / `_ans-badge` DNS discovery records | `{host, vantages?, expected_url?}` | consistent, well-formed `_ans` records prove DNS control of the ANS records | split-horizon across vantages → FAILED; unreachable/absent → NOT_VERIFIED | implements the ANS `ANS_TXT` discovery profile. Asserts DNS control, not agent-receipt trust (that is `ans-scitt`) |
+| `ans-txt` | ANS `_ans` / `_ans-badge` DNS discovery records | `{host, vantages?, expected_url?}` | consistent, well-formed `_ans` + `_ans-badge` records, every one **DNSSEC-validated** (AD bit from the resolver), prove DNS control of the ANS records | split-horizon across vantages / expected-url mismatch → FAILED; unreachable/absent → NOT_VERIFIED; present but not DNSSEC-validated → NOT_VERIFIED `dnssec_not_validated` | implements the ANS `ANS_TXT` discovery profile. Asserts DNS control, not agent-receipt trust (that is `ans-scitt`). A plain TXT lookup is a claim, not a check |
 | `dns-aid` | DNS-AID (IETF draft-mozleywilliams) SVCB + DNSSEC + DANE | `{fqdn, verify_dane_cert?}` | a DNSSEC-authenticated SVCB record (+ DANE when requested) | DNSSEC bogus / bad SVCB / DANE mismatch → FAILED; unsigned zone / no record → NOT_VERIFIED | **consumes the upstream `dns-aid` PyPI package** (`dns_aid.core.validator.verify`) — thin adapter, never forked |
 | `jws-catalog` | A signed AI-Catalog (ARD / Cisco AGNTCY discovery) | `{entries, signature (detached JWS), jwks \| public_key}` | ES256 detached JWS verifies over the JCS-canonical entries | tampered entry (catalog hijack), wrong key → FAILED; missing pieces → NOT_VERIFIED | implements the AI-Catalog signed-catalog contract (ES256 detached JWS over RFC 8785 entries) |
-| `nanda-delegation` | A domainless `did:key` delegation chain | `{chain, signatures, status_tokens, provider_scopes, now?}` | every hop's **ES256 (P-256)** JWS verifies, scopes contain (no escalation), windows nest, tokens fresh-ACTIVE | scope escalation, over-depth, expired/non-nested window, revoked ancestor, stale token, forged sig → FAILED | implements the delegation-chain model over ES256/P-256 detached JWS (subjects/signers as PEM, DER, JWK, or `did:key` P-256) |
+| `nanda-delegation` | A domainless `did:key` delegation chain | `{chain, signatures, provider_scopes}` — plus a **verifier-side** `status_source` passed to the profile, not the evidence | every hop's **ES256 (P-256)** JWS verifies, scopes contain (no escalation), windows nest at the verifier's UTC clock, and the verifier's own `status_source` reports a fresh ACTIVE token per hop | scope escalation, over-depth, expired/non-nested window, revoked ancestor, stale token, forged sig → FAILED; no `status_source` → NOT_VERIFIED `status_unverified` | implements the delegation-chain model over ES256/P-256 detached JWS (subjects/signers as PEM, DER, JWK, or `did:key` P-256). Evidence-supplied `now` and `status_tokens` are the subject's claims and are ignored; `trust_evidence_clock=True` (test-only) pins the clock for offline fixtures |
 
 ## The proof block
 
@@ -47,6 +47,19 @@ class ProofResult(BaseModel):
 `ProofResult` is the typed value of `SmAgentFacts.proof`. A pre-v0.4 opaque `proof` dict is
 accepted for back-compat but downgraded to `NOT_VERIFIED(legacy-unverified)` — a legacy
 payload can never masquerade as verified.
+
+A `VERIFIED` must carry a non-empty `evidence_ref` **and** a `method` that is a registered
+verification method (`sm_bridge.trust.base.register_verification_method`; the in-tree
+profiles' methods are pre-registered). An inbound record claiming `VERIFIED` via a method
+this registry does not implement is downgraded to `NOT_VERIFIED(unregistered-method)`
+rather than rejected (one record must not wedge a federation pull) or kept (that would
+launder it).
+
+**Construction is not a guard.** The invariant catches a VERIFIED with no evidence or an
+unknown method name; it cannot tell whether the named check ran, and anything that can
+call `ProofResult.verified` can register a name first. The guarantee that `VERIFIED`
+means a real check is made by each profile's code and pinned by its tests — read a proof
+block as that profile's statement, and trust it as far as you trust the profile.
 
 ## Adding a source
 

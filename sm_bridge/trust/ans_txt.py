@@ -24,22 +24,40 @@ records checked. It is deliberately *not* a claim that the agent behind the
 badge is receipt-verified; agent trust requires the badge → transparency-log →
 SCITT chain, which is out of scope here.
 
+**DNSSEC is the check.** A plain TXT answer proves nothing about who controls the
+zone: any on-path resolver, a poisoned cache or a spoofed reply yields the same
+bytes. ``VERIFIED`` therefore requires that every record this profile read
+(``_ans`` and ``_ans-badge``, at every vantage) came back **DNSSEC-validated** —
+the resolver set the AD (Authentic Data) bit after validating the chain to the
+root. Records that are present, well-formed and consistent but *not* validated
+are ``NOT_VERIFIED`` with reason ``dnssec_not_validated``: an honest "these are
+the records, but nothing authenticated them". Until 0.11.0 this profile returned
+``VERIFIED`` from an unvalidated lookup, which contradicted the README's "every
+VERIFIED is a real signature, DNS, or Merkle check".
+
 Honesty rule (from `trust/base.py`): when DNS is unreachable, times out, or the
 records are simply absent/malformed, this profile returns ``NOT_VERIFIED`` with a
 reason — never ``FAILED`` (which is an adversarial rejection) and never a
 fabricated ``VERIFIED``. The one adversarial rejection this profile does make is
 **split-horizon DNS**: when two or more vantages disagree on the advertised
 endpoint set, that divergence is affirmative evidence of tampering →
-``FAILED`` (mirrors the two-vantage endpoint diff in `routes/divergence.ts`).
+``FAILED`` (mirrors the two-vantage endpoint diff in `routes/divergence.ts`). An
+expected-url mismatch is likewise ``FAILED``. Both are decided before the DNSSEC
+gate: divergent or mismatching records are evidence against the subject whether
+or not anything authenticated them.
 
 Resolver seam
 -------------
 `__init__(self, resolver=None)` takes an injectable callable so tests never touch
-the network. The callable is either ``(qname, rdtype) -> list[str]`` or, to
-support per-vantage queries, ``(qname, rdtype, vantage) -> list[str]`` — the
-arity is detected once and the extra argument is passed only when accepted. The
-default resolver imports `dnspython` lazily (mirrors the repo's lazy-import
-pattern) so a core-only install never pays for the `[trust]` extra.
+the network. The callable is either ``(qname, rdtype) -> answer`` or, to support
+per-vantage queries, ``(qname, rdtype, vantage) -> answer`` — the arity is
+detected once and the extra argument is passed only when accepted. ``answer`` is
+a :class:`DnsAnswer` ``(records, authenticated)``; a bare ``list[str]`` is also
+accepted and is treated as **unauthenticated**, so a resolver that says nothing
+about DNSSEC can never produce a ``VERIFIED``. The default resolver imports
+`dnspython` lazily (mirrors the repo's lazy-import pattern) so a core-only
+install never pays for the `[trust]` extra; it requests DNSSEC (EDNS DO + AD) and
+reports the AD bit of each response.
 """
 
 from __future__ import annotations
@@ -79,15 +97,48 @@ def _is_valid_fqdn(host: Any) -> bool:
     return isinstance(host, str) and bool(_FQDN_RE.match(host))
 
 
-def _default_resolver(qname: str, rdtype: str, vantage: str | None = None) -> list[str]:
+class DnsAnswer(NamedTuple):
+    """One DNS answer as the resolver seam reports it.
+
+    ``authenticated`` is True only when the resolver **validated** the answer with
+    DNSSEC — for dnspython, the AD bit was set on the response. A resolver that
+    cannot say sets it False, and the profile then cannot return ``VERIFIED``.
+    """
+
+    records: list[str]
+    authenticated: bool = False
+
+
+#: What an injected resolver may return: a :class:`DnsAnswer`, or a bare record list
+#: (treated as unauthenticated).
+ResolverAnswer = DnsAnswer | list[str]
+
+
+def _as_answer(raw: Any) -> DnsAnswer:
+    if isinstance(raw, DnsAnswer):
+        return raw
+    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[0], list):
+        return DnsAnswer(list(raw[0]), bool(raw[1]))
+    if isinstance(raw, list):
+        return DnsAnswer(list(raw), False)
+    raise TypeError(
+        f"resolver must return DnsAnswer or list[str], got {type(raw).__name__}"
+    )
+
+
+def _default_resolver(qname: str, rdtype: str, vantage: str | None = None) -> DnsAnswer:
     """dnspython-backed resolver. Imported lazily so core installs stay light.
 
     `vantage` is an optional ``ip[:port]`` nameserver spec; when given, the query
-    is directed at that authoritative server (multi-vantage split-horizon probe).
-    Errors (timeout, NXDOMAIN, NoAnswer, no nameservers) propagate to the caller,
-    which turns them into an honest NOT_VERIFIED.
+    is directed at that server (multi-vantage split-horizon probe). The query asks
+    for DNSSEC (EDNS DO bit, and the AD bit requesting validation, RFC 6840 §5.7)
+    and the returned ``authenticated`` is the AD bit of the response — set only by
+    a validating resolver that authenticated the data. Errors (timeout, NXDOMAIN,
+    NoAnswer, no nameservers) propagate to the caller, which turns them into an
+    honest NOT_VERIFIED.
     """
-    import dns.resolver  # lazy: only when actually resolving over the network
+    import dns.flags  # lazy: only when actually resolving over the network
+    import dns.resolver
 
     resolver = dns.resolver.Resolver(configure=vantage is None)
     if vantage is not None:
@@ -97,6 +148,8 @@ def _default_resolver(qname: str, rdtype: str, vantage: str | None = None) -> li
             resolver.port = int(ns_port)
     resolver.timeout = _DNS_TIMEOUT_S
     resolver.lifetime = _DNS_TIMEOUT_S
+    resolver.use_edns(0, dns.flags.DO, 1232)
+    resolver.set_flags(dns.flags.RD | dns.flags.AD)
 
     answer = resolver.resolve(qname, rdtype)
     out: list[str] = []
@@ -106,7 +159,8 @@ def _default_resolver(qname: str, rdtype: str, vantage: str | None = None) -> li
             out.append(b"".join(rdata.strings).decode("utf-8", "replace"))
         else:
             out.append(rdata.to_text())
-    return out
+    authenticated = bool(answer.response.flags & dns.flags.AD)
+    return DnsAnswer(out, authenticated)
 
 
 def _parse_kv(txt: str) -> dict[str, str]:
@@ -137,6 +191,8 @@ class _View(NamedTuple):
     endpoints: tuple[str, ...]
     badge_url: str
     agent_id: str
+    #: Names of the load-bearing records that came back WITHOUT DNSSEC validation.
+    unauthenticated: tuple[str, ...]
 
 
 class AnsTxtProfile:
@@ -149,8 +205,8 @@ class AnsTxtProfile:
 
     profile_id = "ans-txt"
 
-    def __init__(self, resolver: Callable[..., list[str]] | None = None) -> None:
-        self._resolver: Callable[..., list[str]] = resolver or _default_resolver
+    def __init__(self, resolver: Callable[..., ResolverAnswer] | None = None) -> None:
+        self._resolver: Callable[..., ResolverAnswer] = resolver or _default_resolver
         # Detect whether the resolver accepts a third `vantage` argument so a
         # simple 2-arg fake and a vantage-aware fake both work through one seam.
         try:
@@ -161,10 +217,10 @@ class AnsTxtProfile:
         except (TypeError, ValueError):
             self._accepts_vantage = False
 
-    def _query(self, qname: str, rdtype: str, vantage: str | None) -> list[str]:
+    def _query(self, qname: str, rdtype: str, vantage: str | None) -> DnsAnswer:
         if self._accepts_vantage:
-            return self._resolver(qname, rdtype, vantage)
-        return self._resolver(qname, rdtype)
+            return _as_answer(self._resolver(qname, rdtype, vantage))
+        return _as_answer(self._resolver(qname, rdtype))
 
     async def verify(self, subject: Any, evidence: dict[str, Any]) -> ProofResult:
         method = "ans-txt-control"
@@ -196,14 +252,14 @@ class AnsTxtProfile:
 
             # --- _ans.<host> TXT (v=ans1) --------------------------------------
             try:
-                ans_txt = self._query(f"_ans.{host}", "TXT", vantage)
+                ans_answer = self._query(f"_ans.{host}", "TXT", vantage)
             except Exception as exc:  # timeout / NXDOMAIN / no nameservers
                 return ProofResult.not_verified(
                     profile=self.profile_id,
                     method=method,
                     reason=f"DNS unreachable/absent: _ans.{host} @ {label}: {exc}",
                 )
-            ans_kv = _find_kv(ans_txt, "ans1")
+            ans_kv = _find_kv(ans_answer.records, "ans1")
             if ans_kv is None:
                 return ProofResult.not_verified(
                     profile=self.profile_id,
@@ -223,14 +279,14 @@ class AnsTxtProfile:
 
             # --- _ans-badge.<host> TXT (v=ans-badge1) --------------------------
             try:
-                badge_txt = self._query(f"_ans-badge.{host}", "TXT", vantage)
+                badge_answer = self._query(f"_ans-badge.{host}", "TXT", vantage)
             except Exception as exc:
                 return ProofResult.not_verified(
                     profile=self.profile_id,
                     method=method,
                     reason=f"DNS unreachable/absent: _ans-badge.{host} @ {label}: {exc}",
                 )
-            badge_kv = _find_kv(badge_txt, "ans-badge1")
+            badge_kv = _find_kv(badge_answer.records, "ans-badge1")
             if badge_kv is None:
                 return ProofResult.not_verified(
                     profile=self.profile_id,
@@ -263,13 +319,18 @@ class AnsTxtProfile:
             svcb: list[str] = []
             for rr in ("SVCB", "HTTPS"):
                 try:
-                    svcb.extend(self._query(host, rr, vantage))
+                    svcb.extend(self._query(host, rr, vantage).records)
                 except Exception:
                     # Absent/unsupported SVCB is normal; it never blocks a
                     # verdict — the _ans/_ans-badge pair is the load-bearing part.
                     pass
 
             endpoints = tuple(sorted({url, *svcb}))
+            unauthenticated: list[str] = []
+            if not ans_answer.authenticated:
+                unauthenticated.append(f"_ans.{host}")
+            if not badge_answer.authenticated:
+                unauthenticated.append(f"_ans-badge.{host}")
             views.append(
                 _View(
                     vantage=label,
@@ -277,6 +338,7 @@ class AnsTxtProfile:
                     endpoints=endpoints,
                     badge_url=badge_url,
                     agent_id=agent_id,
+                    unauthenticated=tuple(unauthenticated),
                 )
             )
 
@@ -305,7 +367,23 @@ class AnsTxtProfile:
                     reason=f"split-horizon DNS: vantage endpoints diverge: {detail}",
                 )
 
-        # --- consistent, well-formed → DNS control proven ----------------------
+        # --- DNSSEC gate: consistent records nobody authenticated are a claim ----
+        unvalidated = [v for v in views if v.unauthenticated]
+        if unvalidated:
+            detail = "; ".join(
+                f"{v.vantage}: {', '.join(v.unauthenticated)}" for v in unvalidated
+            )
+            return ProofResult.not_verified(
+                profile=self.profile_id,
+                method=method,
+                reason=(
+                    "dnssec_not_validated: ANS records for "
+                    f"{host} are present and consistent but the resolver did not "
+                    f"report DNSSEC validation (no AD bit) for: {detail}"
+                ),
+            )
+
+        # --- consistent, well-formed, DNSSEC-validated → DNS control proven -----
         primary = views[0]
         record_blob = "|".join(
             [
@@ -325,4 +403,4 @@ class AnsTxtProfile:
         )
 
 
-__all__ = ["AnsTxtProfile", "profile_id"]
+__all__ = ["AnsTxtProfile", "DnsAnswer", "ResolverAnswer", "profile_id"]

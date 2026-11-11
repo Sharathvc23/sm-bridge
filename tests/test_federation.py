@@ -6,6 +6,7 @@ A fake ``fetch`` mimics a real peer's ``/nanda/deltas?since=`` semantics
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -129,3 +130,44 @@ def test_poller_thread_start_stop() -> None:
     finally:
         poller.stop()
     assert poller._thread is None
+
+
+def test_poller_surfaces_a_failed_tick_instead_of_swallowing_it(caplog) -> None:
+    """`_run` used to `except Exception: pass`. A peer that is down, or serving a
+    malformed page, now shows up in the log and on `last_error`; a later success clears it."""
+    store = DeltaStore()
+    log = [_delta(1, "upsert", "navigator")]
+    healthy = _peer_fetch(log)
+    broken = {"on": True}
+
+    def flaky(url: str) -> dict:
+        if broken["on"]:
+            raise ConnectionError("peer unreachable: connection refused")
+        return healthy(url)
+
+    poller = FederationPoller("https://peer.example", store, interval=0.01, fetch=flaky)
+    assert poller.last_error is None
+    with caplog.at_level(logging.WARNING, logger="sm_bridge.federation"):
+        poller.start()
+        try:
+            deadline = time.time() + 2.0
+            while poller.last_error is None and time.time() < deadline:
+                time.sleep(0.01)
+            assert isinstance(poller.last_error, ConnectionError)
+            assert poller.since == 0  # the cursor did not move on a failed tick
+
+            broken["on"] = False
+            deadline = time.time() + 2.0
+            while poller.last_error is not None and time.time() < deadline:
+                time.sleep(0.01)
+            assert poller.last_error is None
+            assert "navigator" in current_facts(store, default_slug)
+        finally:
+            poller.stop()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "a failed tick must be logged at WARNING"
+    rec = warnings[0]
+    assert "https://peer.example" in rec.getMessage()
+    assert "connection refused" in rec.getMessage()
+    assert rec.exc_info is not None and isinstance(rec.exc_info[1], ConnectionError)
