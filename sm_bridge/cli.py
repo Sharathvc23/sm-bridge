@@ -8,7 +8,7 @@ and it prints an honest verdict.
     sm-bridge verify jws-catalog --catalog ai-catalog.json --signature sig.jws --jwks jwks.json
     sm-bridge verify agent-card  --card card.json --signature-b64 <b64> --pubkey key.pem
     sm-bridge verify dns-aid     --fqdn agent.example.com [--dane]
-    sm-bridge verify delegation  --evidence delegation-bundle.json
+    sm-bridge verify delegation  --evidence delegation-bundle.json --status-source status.json
 
 Exit code: 0 = VERIFIED, 1 = FAILED, 2 = NOT_VERIFIED, 64 = usage error. The verification
 adapters live in the ``[trust]`` extra; install with ``pip install 'sm-bridge[trust]'``.
@@ -116,7 +116,23 @@ def _verify_delegation(args: argparse.Namespace) -> int:
     from sm_bridge.trust.delegation import NandaDelegationProfile
 
     evidence = json.loads(Path(args.evidence).read_text())
-    return _report(_run(NandaDelegationProfile().verify(None, evidence)))
+    status_source = None
+    if args.status_source:
+        # The verifier's own view of revocation status — a file the operator controls,
+        # never the bundle the subject handed over. {delegationId: {status, exp}}.
+        tokens = json.loads(Path(args.status_source).read_text())
+        if not isinstance(tokens, dict):
+            return _die("--status-source must be a JSON object {delegationId: {status, exp}}")
+
+        def status_source(delegation_id: str) -> dict[str, Any] | None:
+            tok = tokens.get(delegation_id)
+            return tok if isinstance(tok, dict) else None
+
+    profile = NandaDelegationProfile(
+        status_source=status_source,
+        trust_evidence_clock=bool(args.trust_evidence_clock),
+    )
+    return _report(_run(profile.verify(None, evidence)))
 
 
 # ----- parser ------------------------------------------------------------------------
@@ -154,6 +170,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     g = vsub.add_parser("delegation", help="verify a did:key delegation chain")
     g.add_argument("--evidence", required=True, help="path to the delegation evidence bundle (JSON)")
+    g.add_argument(
+        "--status-source",
+        help=(
+            "path to YOUR revocation-status view, a JSON object {delegationId: {status, exp}}. "
+            "Without it the chain cannot be VERIFIED (status_unverified): status tokens inside "
+            "the evidence bundle are the subject's own claim and are ignored."
+        ),
+    )
+    g.add_argument(
+        "--trust-evidence-clock",
+        action="store_true",
+        help=(
+            "TEST ONLY: evaluate at the bundle's `now` instead of the wall clock. Lets an "
+            "expired delegate pick the instant it is judged at; never use on a real verdict."
+        ),
+    )
     g.set_defaults(func=_verify_delegation)
 
     return p

@@ -73,6 +73,73 @@ def test_jws_catalog_hijack_fails(tmp_path, capsys):
     assert "FAILED" in capsys.readouterr().out
 
 
+def _delegation_bundle(tmp_path, *, expires_in: int = 1000):
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from sm_bridge.trust.delegation import sign_credential, signer_pubkey_pem
+
+    now = int(__import__("time").time())
+    fmt = lambda ts: __import__("datetime").datetime.fromtimestamp(  # noqa: E731
+        ts, tz=__import__("datetime").timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    key = ec.generate_private_key(ec.SECP256R1())
+    cred = {
+        "delegationId": "d-root",
+        "schemaVersion": "DELEGATION-V1",
+        "issuer": {"ansName": "p.ans", "agentId": "p", "did": "did:key:zP"},
+        "subject": {"did": "did:key:zS"},
+        "scopes": ["mail.send"],
+        "issuedAt": fmt(now - 100),
+        "expiresAt": fmt(now + expires_in),
+        "maxRedelegationDepth": 0,
+        "parentDelegation": None,
+    }
+    bundle = tmp_path / "bundle.json"
+    bundle.write_text(json.dumps({
+        "chain": [cred],
+        "signatures": {"d-root": {"sig_b64": sign_credential(cred, key), "signer_pubkey": signer_pubkey_pem(key)}},
+        # The subject's own claim — the CLI must not take it as the verifier's view.
+        "status_tokens": {"d-root": {"status": "ACTIVE", "exp": now + 3600}},
+        "provider_scopes": ["mail"],
+    }))
+    return bundle, now
+
+
+def test_delegation_without_a_status_source_is_not_verified(tmp_path, capsys):
+    bundle, _ = _delegation_bundle(tmp_path)
+    rc = main(["verify", "delegation", "--evidence", str(bundle)])
+    out = capsys.readouterr().out
+    assert rc == 2  # NOT_VERIFIED
+    assert "status_unverified" in out
+
+
+def test_delegation_with_the_verifiers_status_source_is_verified(tmp_path, capsys):
+    bundle, now = _delegation_bundle(tmp_path)
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"d-root": {"status": "ACTIVE", "exp": now + 3600}}))
+    rc = main(["verify", "delegation", "--evidence", str(bundle), "--status-source", str(status)])
+    assert rc == 0
+    assert "VERIFIED" in capsys.readouterr().out
+
+
+def test_delegation_revoked_at_the_verifier_fails_despite_the_bundles_active(tmp_path, capsys):
+    bundle, now = _delegation_bundle(tmp_path)
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"d-root": {"status": "REVOKED", "exp": now + 3600}}))
+    rc = main(["verify", "delegation", "--evidence", str(bundle), "--status-source", str(status)])
+    assert rc == 1
+    assert "revoked" in capsys.readouterr().out
+
+
+def test_delegation_status_source_must_be_an_object(tmp_path, capsys):
+    bundle, _ = _delegation_bundle(tmp_path)
+    status = tmp_path / "status.json"
+    status.write_text("[]")
+    rc = main(["verify", "delegation", "--evidence", str(bundle), "--status-source", str(status)])
+    assert rc == 64
+    assert "--status-source" in capsys.readouterr().err
+
+
 def test_dns_aid_absent_is_not_verified(capsys):
     rc = main(["verify", "dns-aid", "--fqdn", "no-such.invalid-cli-check.example"])
     assert rc == 2  # NOT_VERIFIED

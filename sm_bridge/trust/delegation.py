@@ -22,8 +22,10 @@ Requires the ``[trust]`` extra (``cryptography``). Core never imports this modul
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -185,7 +187,7 @@ def _validate_structure(cred: dict[str, Any]) -> None:
 def _validate_chain(
     chain: list[dict[str, Any]],
     provider_scopes: list[str],
-    status_tokens: dict[str, dict[str, Any]],
+    status_tokens: dict[str, dict[str, Any]] | None,
     now: datetime,
     now_ts: float,
 ) -> None:
@@ -194,6 +196,11 @@ def _validate_chain(
     ``chain`` is ROOT-FIRST: ``chain[0]`` is the provider-issued root credential and
     ``chain[-1]`` is the credential being exercised. Raises :class:`_ChainError` with a
     verbatim reason on the first violated rule; returns None only for a fully honest chain.
+
+    ``status_tokens`` are the **verifier's** view of each hop's revocation status. ``None``
+    means the verifier has no status source: the structural rules still run (a scope
+    escalation is a rejection whatever the revocation state), and the caller then
+    withholds VERIFIED because rule 5 could not be checked.
     """
     for i, cred in enumerate(chain):
         _validate_structure(cred)
@@ -213,20 +220,22 @@ def _validate_chain(
                     f"chain parentDelegation linkage broken: credential {did} does not point at parent {prev_id}"
                 )
 
-        # Rule 5 (revocation) + freshness — a fresh ACTIVE status token is required per hop.
-        tok = status_tokens.get(did)
-        if tok is None:
-            raise _ChainError(f"stale status token: no status token for {did}")
-        status = tok.get("status")
-        if status == "REVOKED":
-            raise _ChainError(f"revoked credential in chain: {did} (chain broken)")
-        if status != "ACTIVE":
-            raise _ChainError(f"stale status token: {did} status {status!r} is not ACTIVE")
-        exp = tok.get("exp")
-        if exp is None or float(exp) < now_ts:
-            raise _ChainError(
-                f"stale status token: {did} exp {exp} < now {int(now_ts)}"
-            )
+        # Rule 5 (revocation) + freshness — a fresh ACTIVE status token is required per hop,
+        # and it must come from the verifier's own status source (see verify()).
+        if status_tokens is not None:
+            tok = status_tokens.get(did)
+            if tok is None:
+                raise _ChainError(f"stale status token: no status token for {did}")
+            status = tok.get("status")
+            if status == "REVOKED":
+                raise _ChainError(f"revoked credential in chain: {did} (chain broken)")
+            if status != "ACTIVE":
+                raise _ChainError(f"stale status token: {did} status {status!r} is not ACTIVE")
+            exp = tok.get("exp")
+            if exp is None or float(exp) < now_ts:
+                raise _ChainError(
+                    f"stale status token: {did} exp {exp} < now {int(now_ts)}"
+                )
 
         # Rule 4b — inside its own window at `now`.
         issued, expires = _window(cred)
@@ -274,6 +283,11 @@ def _validate_chain(
             )
 
 
+#: A verifier-side revocation-status source: ``delegationId -> status token | None``, where
+#: a token is ``{"status": "ACTIVE"|"REVOKED", "exp": <unix seconds>}``. Sync or async.
+StatusSource = Callable[[str], "dict[str, Any] | None | Awaitable[dict[str, Any] | None]"]
+
+
 class NandaDelegationProfile:
     """Trust profile: verify a DELEGATION-V1 chain end-to-end.
 
@@ -282,23 +296,66 @@ class NandaDelegationProfile:
         {
           "chain": [<credential dict>, ...],          # ROOT-FIRST: chain[0] = root
           "signatures": {delegationId: {"sig_b64": ..., "signer_pubkey": ...}},
-          "status_tokens": {delegationId: {"status": "ACTIVE"|"REVOKED", "exp": <unix>}},
           "provider_scopes": [<scope>, ...],          # the root issuer's own capabilities
-          "now": <unix seconds>,                      # optional; defaults to wall clock
         }
 
+    Two inputs that used to be read from the evidence are **not** any more, because the
+    evidence is supplied by the subject being verified and both decided the verdict:
+
+    * ``now`` — the evaluation instant. It is the verifier's UTC wall clock. An
+      evidence-supplied ``now`` is ignored unless the profile was built with
+      ``trust_evidence_clock=True``, which exists so offline tests and demos can pin an
+      instant; it is **test-only** and must never be set on a verifier that decides
+      anything, since it lets an expired delegate choose the time it is judged at.
+    * ``status_tokens`` — per-hop revocation status. A subject asserting its own
+      delegation is ``ACTIVE`` is a claim, not a check, so evidence-supplied tokens are
+      ignored. Rule 5 is checked against ``status_source`` — a verifier-side callable
+      ``delegationId -> token | None`` (sync or async) that the operator controls (a
+      revocation list, a status endpoint, a cache the verifier fills). Without one, a
+      chain that passes every other check is ``NOT_VERIFIED`` with reason
+      ``status_unverified`` — never VERIFIED.
+
     HONESTY CONTRACT:
-      * VERIFIED only after (a) a real Ed25519 signature check passes for every credential
-        AND (b) every ValidateChain rule + per-hop fresh ACTIVE status token holds.
-      * A stale/absent status token, a revoked hop, a rule violation, or a forged
-        signature → FAILED (with the verbatim reason).
-      * Missing chain / signatures / provider_scopes, or an unsigned hop we cannot check
-        → NOT_VERIFIED (an honest "unknown", never a fabricated pass).
+      * VERIFIED only after (a) a real ES256 signature check passes for every credential
+        AND (b) every ValidateChain rule holds at the verifier's clock AND (c) the
+        verifier's own status source reports a fresh ACTIVE token for every hop.
+      * A stale/absent status token (from the verifier's source), a revoked hop, a rule
+        violation, or a forged signature → FAILED (with the verbatim reason).
+      * Missing chain / signatures / provider_scopes, an unsigned hop we cannot check, or
+        no status source → NOT_VERIFIED (an honest "unknown", never a fabricated pass).
     """
 
     profile_id = "nanda-delegation"
     _METHOD = "delegation-chain"
     _MAX_CHAIN = 64  # DoS bound on chain length (real chains are a few hops deep)
+
+    def __init__(
+        self,
+        *,
+        status_source: StatusSource | None = None,
+        trust_evidence_clock: bool = False,
+    ) -> None:
+        self._status_source = status_source
+        self._trust_evidence_clock = trust_evidence_clock
+
+    async def _status_token(self, delegation_id: str) -> dict[str, Any] | None:
+        assert self._status_source is not None
+        result = self._status_source(delegation_id)
+        if inspect.isawaitable(result):
+            result = await result
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"status_source must return a status-token dict or None for {delegation_id}, "
+                f"got {type(result).__name__}"
+            )
+        return result
+
+    def _now(self, evidence: dict[str, Any]) -> float:
+        if self._trust_evidence_clock and "now" in evidence:
+            return float(evidence["now"])
+        return time.time()
 
     async def verify(self, subject: Any, evidence: dict[str, Any]) -> ProofResult:
         # ---- (0) evidence presence — can we even attempt a check? -------------------
@@ -331,10 +388,9 @@ class NandaDelegationProfile:
                 method=self._METHOD,
                 reason="no provider_scopes supplied to anchor issuance coverage",
             )
-        status_tokens = evidence.get("status_tokens")
-        if not isinstance(status_tokens, dict):
-            status_tokens = {}
-        now_ts = float(evidence["now"]) if "now" in evidence else time.time()
+        # Evidence-supplied `status_tokens` and `now` are the subject's claims; see the
+        # class docstring. The clock is ours, and the status tokens come from our source.
+        now_ts = self._now(evidence)
         now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
 
         # ---- (1) real signature check for every credential --------------------------
@@ -361,7 +417,17 @@ class NandaDelegationProfile:
                     reason=f"forged signature: JWS verification failed for credential {did}",
                 )
 
-        # ---- (2 + 3) ValidateChain rules + status-token freshness -------------------
+        # ---- (2) the verifier's own view of each hop's revocation status -------------
+        status_tokens: dict[str, dict[str, Any]] | None = None
+        if self._status_source is not None:
+            status_tokens = {}
+            for cred in chain:
+                did = cred["delegationId"]
+                tok = await self._status_token(did)
+                if tok is not None:
+                    status_tokens[did] = tok
+
+        # ---- (3) ValidateChain rules (+ rule 5 when we have a status view) ----------
         try:
             _validate_chain(chain, provider_scopes, status_tokens, now_dt, now_ts)
         except _ChainError as exc:
@@ -369,6 +435,24 @@ class NandaDelegationProfile:
                 profile=self.profile_id,
                 method=self._METHOD,
                 reason=str(exc),
+            )
+
+        if status_tokens is None:
+            # Everything we could check passed, but rule 5 (revocation) was not checked by
+            # anything we control. The subject's own `status_tokens`, if any, are a claim.
+            claimed = evidence.get("status_tokens")
+            note = (
+                "; evidence-supplied status_tokens were ignored as a self-assertion"
+                if isinstance(claimed, dict) and claimed
+                else ""
+            )
+            return ProofResult.not_verified(
+                profile=self.profile_id,
+                method=self._METHOD,
+                reason=(
+                    "status_unverified: no verifier-side status_source configured, so "
+                    "revocation status (rule 5) could not be checked" + note
+                ),
             )
 
         root_id = chain[0]["delegationId"]
@@ -382,6 +466,7 @@ class NandaDelegationProfile:
 __all__ = [
     "NandaDelegationProfile",
     "SCHEMA_VERSION",
+    "StatusSource",
     "jcs_canonical",
     "scope_covers",
     "scope_subset",

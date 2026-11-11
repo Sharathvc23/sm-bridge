@@ -4,11 +4,18 @@ Every test mints **real** P-256 keys, signs credentials with them, and drives th
 profile end-to-end. Honest chains must VERIFY; every attack (scope escalation, over-depth,
 bad windows, revocation, stale token, forged signature) must be rejected as FAILED with a
 reason that names the fault; missing evidence must be an honest NOT_VERIFIED — never a pass.
+
+The evaluation instant and the revocation view are the **verifier's**: tests pin ``NOW``
+through ``trust_evidence_clock=True`` (the test-only flag) and hand the status tokens to
+the profile as its ``status_source``. Until 0.11.0 both were read from the evidence the
+subject supplied, so a revoked or expired delegate could assert ACTIVE and pick its own
+clock — the "self-asserted status" section below pins that this is now rejected.
 """
 
 from __future__ import annotations
 
 import copy
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -62,8 +69,24 @@ def _token(status: str = "ACTIVE", exp: int = NOW + 3600) -> dict:
     return {"status": status, "exp": exp}
 
 
-async def _verify(evidence: dict):
-    return await NandaDelegationProfile().verify(subject=None, evidence=evidence)
+async def _verify(evidence: dict, *, status_source=None, trust_evidence_clock: bool = True):
+    """Drive the profile the way a verifier does.
+
+    The test bundles still carry ``status_tokens`` (they are what a subject would hand
+    over); the *verifier* view is derived from them here via ``status_source`` unless the
+    test supplies its own. ``now`` in the bundle is honoured only because the test-only
+    clock flag is on.
+    """
+    if status_source is None:
+        tokens = evidence.get("status_tokens") or {}
+
+        def status_source(did: str):  # noqa: E306 - closure over the test's tokens
+            return tokens.get(did)
+
+    profile = NandaDelegationProfile(
+        status_source=status_source, trust_evidence_clock=trust_evidence_clock
+    )
+    return await profile.verify(subject=None, evidence=evidence)
 
 
 # --------------------------------------------------------------------------------------
@@ -456,6 +479,150 @@ async def test_missing_provider_scopes_not_verified():
     )
     assert res.status is ProofStatus.NOT_VERIFIED
     assert "provider_scopes" in res.failure_reason
+
+
+# --------------------------------------------------------------------------------------
+# 9. Self-asserted status and clock — the subject does not get to grade itself
+# --------------------------------------------------------------------------------------
+
+
+def _honest_root_bundle(key: ec.EllipticCurvePrivateKey, **over) -> dict:
+    root = _cred(
+        "d-root", "did:key:zAlice", ["mail.send"],
+        issued=NOW - 100, expires=NOW + 1000, max_depth=2, parent=None,
+    )
+    bundle = {
+        "chain": [root],
+        "signatures": {"d-root": _sign(root, key)},
+        "status_tokens": {"d-root": _token()},
+        "provider_scopes": ["mail"],
+        "now": NOW,
+    }
+    bundle.update(over)
+    return bundle
+
+
+@pytest.mark.asyncio
+async def test_evidence_status_tokens_are_a_claim_not_a_check():
+    # A valid chain whose only ACTIVE assertion comes from the subject's own bundle.
+    key = ec.generate_private_key(ec.SECP256R1())
+    profile = NandaDelegationProfile(trust_evidence_clock=True)  # no status_source
+    res = await profile.verify(None, _honest_root_bundle(key))
+    assert res.status is ProofStatus.NOT_VERIFIED
+    assert res.failure_reason.startswith("status_unverified")
+    assert "ignored as a self-assertion" in res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_no_status_source_and_no_claim_is_still_status_unverified():
+    key = ec.generate_private_key(ec.SECP256R1())
+    bundle = _honest_root_bundle(key)
+    del bundle["status_tokens"]
+    res = await NandaDelegationProfile(trust_evidence_clock=True).verify(None, bundle)
+    assert res.status is ProofStatus.NOT_VERIFIED
+    assert res.failure_reason.startswith("status_unverified")
+    assert "self-assertion" not in res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_revoked_at_the_verifier_beats_active_in_the_evidence():
+    # The bundle says ACTIVE; the verifier's own source says REVOKED. REVOKED wins.
+    key = ec.generate_private_key(ec.SECP256R1())
+    res = await _verify(
+        _honest_root_bundle(key),
+        status_source=lambda did: _token("REVOKED"),
+    )
+    assert res.status is ProofStatus.FAILED
+    assert "revoked" in res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_verifier_source_with_no_token_for_the_hop_is_failed_not_passed():
+    key = ec.generate_private_key(ec.SECP256R1())
+    res = await _verify(_honest_root_bundle(key), status_source=lambda did: None)
+    assert res.status is ProofStatus.FAILED
+    assert "stale status token: no status token for d-root" in res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_async_status_source_is_awaited():
+    key = ec.generate_private_key(ec.SECP256R1())
+
+    async def source(did: str):
+        return _token()
+
+    res = await _verify(_honest_root_bundle(key), status_source=source)
+    assert res.status is ProofStatus.VERIFIED, res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_status_source_returning_garbage_is_a_programming_error():
+    key = ec.generate_private_key(ec.SECP256R1())
+    with pytest.raises(TypeError, match="status_source must return"):
+        await _verify(_honest_root_bundle(key), status_source=lambda did: "ACTIVE")
+
+
+@pytest.mark.asyncio
+async def test_rule_violations_are_failed_even_without_a_status_source():
+    # A scope escalation is a rejection whatever the revocation state; the missing
+    # status source must not soften it into an "unknown".
+    key = ec.generate_private_key(ec.SECP256R1())
+    bundle = _honest_root_bundle(key, provider_scopes=["calendar"])
+    res = await NandaDelegationProfile(trust_evidence_clock=True).verify(None, bundle)
+    assert res.status is ProofStatus.FAILED
+    assert "scope escalation" in res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_evidence_now_is_ignored_by_default():
+    # The credential is valid at the bundle's `now` (a fixed instant in 2027) but long
+    # expired at the wall clock; by default the wall clock decides.
+    key = ec.generate_private_key(ec.SECP256R1())
+    bundle = _honest_root_bundle(key)
+    # Make the credential already expired at wall-clock time but valid at bundle `now`.
+    past = int(time.time()) - 10_000
+    bundle["chain"][0]["issuedAt"] = _rfc3339(past - 100)
+    bundle["chain"][0]["expiresAt"] = _rfc3339(past)
+    bundle["signatures"]["d-root"] = _sign(bundle["chain"][0], key)
+    bundle["now"] = past - 50  # the subject claims "judge me back then"
+    bundle["status_tokens"]["d-root"] = _token(exp=int(time.time()) + 3600)
+
+    tokens = bundle["status_tokens"]
+    strict = NandaDelegationProfile(status_source=lambda did: tokens.get(did))
+    res = await strict.verify(None, bundle)
+    assert res.status is ProofStatus.FAILED
+    assert "validity window" in res.failure_reason
+
+    # Only the explicit, test-only flag lets the bundle's clock in.
+    lenient = NandaDelegationProfile(
+        status_source=lambda did: tokens.get(did), trust_evidence_clock=True
+    )
+    res = await lenient.verify(None, bundle)
+    assert res.status is ProofStatus.VERIFIED, res.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_default_clock_is_utc_wall_clock():
+    # A credential valid now at the wall clock verifies with no `now` in the bundle.
+    key = ec.generate_private_key(ec.SECP256R1())
+    wall = int(time.time())
+    root = _cred(
+        "d-root", "did:key:zAlice", ["mail.send"],
+        issued=wall - 100, expires=wall + 1000, max_depth=2, parent=None,
+    )
+    bundle = {
+        "chain": [root],
+        "signatures": {"d-root": _sign(root, key)},
+        "provider_scopes": ["mail"],
+    }
+    profile = NandaDelegationProfile(status_source=lambda did: _token(exp=wall + 3600))
+    res = await profile.verify(None, bundle)
+    assert res.status is ProofStatus.VERIFIED, res.failure_reason
+
+
+def test_trust_evidence_clock_defaults_off():
+    assert NandaDelegationProfile()._trust_evidence_clock is False
+    assert NandaDelegationProfile()._status_source is None
 
 
 # --------------------------------------------------------------------------------------
