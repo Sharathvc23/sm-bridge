@@ -48,6 +48,19 @@ class ProofResult(BaseModel):
 accepted for back-compat but downgraded to `NOT_VERIFIED(legacy-unverified)` — a legacy
 payload can never masquerade as verified.
 
+A `VERIFIED` must carry a non-empty `evidence_ref` **and** a `method` that is a registered
+verification method (`sm_bridge.trust.base.register_verification_method`; the in-tree
+profiles' methods are pre-registered). An inbound record claiming `VERIFIED` via a method
+this registry does not implement is downgraded to `NOT_VERIFIED(unregistered-method)`
+rather than rejected (one record must not wedge a federation pull) or kept (that would
+launder it).
+
+**Construction is not a guard.** The invariant catches a VERIFIED with no evidence or an
+unknown method name; it cannot tell whether the named check ran, and anything that can
+call `ProofResult.verified` can register a name first. The guarantee that `VERIFIED`
+means a real check is made by each profile's code and pinned by its tests — read a proof
+block as that profile's statement, and trust it as far as you trust the profile.
+
 ## Adding a source
 
 Write one adapter that satisfies the `TrustProfile` protocol (`profile_id` + `async verify`)

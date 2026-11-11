@@ -12,6 +12,11 @@ from fastapi.testclient import TestClient
 from sm_bridge.onboarding import AdmissionError, ANSEntryConverter
 from sm_bridge.router import SmBridge
 from sm_bridge.trust import ProofResult, ProofStatus, TrustRegistry
+from sm_bridge.trust.base import register_verification_method
+
+# A stand-in method name for the fake verifier below; a VERIFIED may only name a
+# registered method, and registering is explicit so the stub is visibly a stub.
+register_verification_method("admission")
 
 
 class _AttestationProfile:

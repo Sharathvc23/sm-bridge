@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from sm_bridge.trust.base import ProofResult
+from sm_bridge.trust.base import ProofResult, ProofStatus, is_registered_method
 
 
 class SmRecord(BaseModel):
@@ -249,6 +249,26 @@ class SmAgentFacts(SmRecord):
             # A ProofResult serialized back in (round-trip) still has these keys — let it
             # validate normally. A legacy/opaque dict lacks them → downgrade honestly.
             if {"profile", "method", "status"} <= set(v):
+                status = v.get("status")
+                method = v.get("method")
+                status_value = status.value if isinstance(status, ProofStatus) else status
+                if (
+                    status_value == ProofStatus.VERIFIED.value
+                    and isinstance(method, str)
+                    and not is_registered_method(method)
+                ):
+                    # A VERIFIED naming a check no profile here implements is somebody
+                    # else's statement (a peer's custom profile, a hand-written record).
+                    # It is not rejected — that would make one record wedge a federation
+                    # pull — and not kept, which would launder it; it is downgraded.
+                    return ProofResult.not_verified(
+                        profile=str(v.get("profile")),
+                        method=method,
+                        reason=(
+                            f"unregistered-method: proof claimed VERIFIED via {method!r}, "
+                            "a verification method this registry does not implement"
+                        ),
+                    )
                 return v
             return ProofResult.legacy()
         return v
